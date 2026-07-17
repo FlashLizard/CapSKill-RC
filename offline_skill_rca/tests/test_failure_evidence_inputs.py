@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from src.io_utils import (
     AGENT_ONLY_EVIDENCE_POLICY_VERSION,
+    discover_rollout_selection,
     load_trajectory,
     sanitize_agent_artifacts,
     sanitize_agent_only_visible_result,
@@ -27,6 +28,38 @@ from src.stages.stage_03_failure_event_extraction import stage3_trajectory_input
 
 
 class FailureEvidenceInputTests(unittest.TestCase):
+    def test_rollout_selection_filters_non_task_failures_before_applying_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            cases = [
+                ("01-success", {"success": 1}),
+                ("02-timeout", {"success": 0, "error_category": "agent_timeout"}),
+                ("03-sandbox", {"success": 0, "error": "sandbox startup failed"}),
+                ("04-failure-a", {"success": 0}),
+                ("05-missing-outcome", {"error": "rollout was interrupted"}),
+                ("06-failure-b", {"rewards": {"score": 0}}),
+                ("07-failure-c", {"success": 0}),
+            ]
+            for name, result in cases:
+                rollout = root / name
+                (rollout / "trajectory").mkdir(parents=True)
+                (rollout / "trajectory" / "acp_trajectory.jsonl").write_text(
+                    '{"type":"agent_message","text":"failed"}\n',
+                    encoding="utf-8",
+                )
+                (rollout / "result.json").write_text(json.dumps(result), encoding="utf-8")
+
+            selected, records = discover_rollout_selection([root], max_traces=2)
+
+            self.assertEqual([path.name for path in selected], ["04-failure-a", "06-failure-b"])
+            by_name = {Path(item["rolloutDir"]).name: item for item in records}
+            self.assertEqual(by_name["01-success"]["reason"], "success")
+            self.assertEqual(by_name["02-timeout"]["reason"], "timeout")
+            self.assertEqual(by_name["03-sandbox"]["reason"], "environment_or_configuration_error")
+            self.assertEqual(by_name["05-missing-outcome"]["reason"], "missing_explicit_outcome")
+            self.assertTrue(by_name["04-failure-a"]["selectedForRepair"])
+            self.assertFalse(by_name["07-failure-c"]["selectedForRepair"])
+
     def test_pipeline_rejects_any_authoritatively_successful_trajectory(self) -> None:
         trajectories = [
             {"traj_id": "failed", "success": 0, "visible_failure_result": {"success": 0}},

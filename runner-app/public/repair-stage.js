@@ -531,6 +531,7 @@ const els = {
   tracePaths: $("stageTracePaths"),
   inferInputs: $("stageInferInputs"),
   inferStatus: $("stageInferStatus"),
+  traceSelection: $("stageTraceSelection"),
   force: $("stageForce"),
   strongModel: $("stageStrongModel"),
   strongReasoningEffort: $("stageStrongReasoningEffort"),
@@ -873,6 +874,42 @@ function inferenceTooltip(data) {
   return lines.join("\n");
 }
 
+function renderTraceSelection(data) {
+  if (!els.traceSelection) return;
+  const rollouts = asArray(data?.rollouts);
+  if (!rollouts.length) {
+    els.traceSelection.innerHTML = "未发现可扫描的 rollout。";
+    return;
+  }
+  const selectedCount = asArray(data?.selectedRollouts).length
+    || rollouts.filter((item) => item.selectedForRepair).length;
+  const eligibleCount = Number(data?.eligibleCount ?? rollouts.filter((item) => item.selection?.selected).length);
+  const limit = Number(data?.selectionLimit || els.maxTraces.value || 5);
+  const summary = `检测到 ${rollouts.length} 条，符合条件 ${eligibleCount} 条，本次选取 ${selectedCount} 条（上限 ${limit} 条）。`;
+  const rows = rollouts.map((rollout) => {
+    const selection = rollout.selection || {};
+    const selected = Boolean(rollout.selectedForRepair);
+    const label = selected ? "已选取" : (selection.reasonLabel || selection.reason || "未选取");
+    const className = selected ? "selected" : "excluded";
+    return `<div class="repair-stage-trace-selection-item ${className}">
+      <span class="repair-stage-trace-selection-mark">${selected ? "✓" : "×"}</span>
+      <code>${escapeHtml(rollout.path || "-")}</code>
+      <span>${escapeHtml(label)}</span>
+    </div>`;
+  }).join("");
+  els.traceSelection.innerHTML = `<div class="repair-stage-trace-selection-summary">${escapeHtml(summary)}</div>${rows}`;
+}
+
+function traceSelectionReasonLabel(reason) {
+  return {
+    task_failure: "明确任务失败",
+    success: "任务成功，不作为失败证据",
+    timeout: "超时，不作为失败证据",
+    environment_or_configuration_error: "环境/配置错误，不作为失败证据",
+    missing_explicit_outcome: "缺少明确 success/reward/score",
+  }[reason] || reason || "未选取";
+}
+
 async function inferInputsFromTracePaths() {
   const tracePaths = els.tracePaths.value.trim();
   if (!tracePaths) {
@@ -883,7 +920,11 @@ async function inferInputsFromTracePaths() {
   els.inferInputs.disabled = true;
   els.inferStatus.textContent = "推断中...";
   try {
-    const data = await postJson("/api/repair-stage/infer-inputs", { tracePaths });
+    const data = await postJson("/api/repair-stage/infer-inputs", {
+      tracePaths,
+      maxTraces: Number(els.maxTraces.value || 5),
+    });
+    renderTraceSelection(data);
     const selected = data.selected || null;
     const warnings = data.warnings || [];
     if (selected?.taskKey && state.tasks.some((task) => task.key === selected.taskKey)) {
@@ -902,6 +943,7 @@ async function inferInputsFromTracePaths() {
   } catch (error) {
     els.inferStatus.textContent = `推断失败：${error.message}`;
     els.inferStatus.title = "";
+    renderTraceSelection({ rollouts: [] });
   } finally {
     els.inferInputs.disabled = false;
   }
@@ -951,6 +993,20 @@ async function loadStatus() {
     els.outputDir.value = state.selectedRunDir;
     applyManifestToForm(state.status?.manifest || {});
     els.subtitle.textContent = `当前运行目录：${state.selectedRunDir}`;
+    renderTraceSelection({
+      rollouts: asArray(data.status?.traceSelection).map((item) => ({
+        path: item.path,
+        selectedForRepair: Boolean(item.selectedForRepair),
+        selection: {
+          selected: Boolean(item.selected),
+          reason: item.reason,
+          reasonLabel: traceSelectionReasonLabel(item.reason),
+        },
+      })),
+      selectedRollouts: asArray(data.status?.traceSelection).filter((item) => item.selectedForRepair).map((item) => item.path),
+      eligibleCount: asArray(data.status?.traceSelection).filter((item) => item.selected).length,
+      selectionLimit: data.status?.manifest?.maxTraces || 5,
+    });
     renderStages();
     renderDetail();
   } catch (error) {

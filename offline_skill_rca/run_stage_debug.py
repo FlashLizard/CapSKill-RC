@@ -19,9 +19,10 @@ from typing import Any
 
 from src.io_utils import (
     AGENT_ONLY_EVIDENCE_POLICY_VERSION,
-    discover_rollout_dirs,
+    discover_rollout_selection,
     list_skill_files,
     load_trajectory,
+    read_json,
     read_text,
     safe_rel,
     sanitize_agent_only_visible_result,
@@ -378,7 +379,22 @@ def persist_runtime_options(config: OfflineSkillRCAConfig) -> None:
     write_json(manifest_path(config.output_dir), manifest)
 
 
-def save_manifest(config: OfflineSkillRCAConfig, rollout_dirs: list[Path]) -> dict[str, Any]:
+def _manifest_trace_selection(config: OfflineSkillRCAConfig, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把本地筛选记录转成不含绝对路径的运行诊断信息。"""
+    output = []
+    for record in records:
+        item = dict(record)
+        rollout_dir = item.pop("rolloutDir", "")
+        item["path"] = safe_rel(config.root, Path(rollout_dir)) if rollout_dir else ""
+        output.append(item)
+    return output
+
+
+def save_manifest(
+    config: OfflineSkillRCAConfig,
+    rollout_dirs: list[Path],
+    trace_selection: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """保存不含 API key 的运行配置，方便之后逐 stage 续跑。"""
     manifest = {
         "method": "Offline SkillRCA v2 stage-debug",
@@ -389,6 +405,7 @@ def save_manifest(config: OfflineSkillRCAConfig, rollout_dirs: list[Path]) -> di
         "outputSkillsDir": rel(config.output_skills_dir),
         "tracePaths": [rel(path) for path in config.trace_paths if path],
         "rolloutDirs": [rel(path) for path in rollout_dirs],
+        "traceSelection": trace_selection or [],
         "strongBaseUrl": config.strong_base_url,
         "strongModel": config.strong_model,
         "strongReasoningEffort": config.strong_reasoning_effort,
@@ -420,14 +437,19 @@ def init_run(args: argparse.Namespace) -> dict[str, Any]:
     validate_config(config)
     task_text = read_text(config.task_dir / "task.md", 32_000)
     skill_files = list_skill_files(config.root, config.skills_dir)
-    rollout_dirs = discover_rollout_dirs([path for path in config.trace_paths if path], config.max_traces)
+    rollout_dirs, trace_selection = discover_rollout_selection(
+        [path for path in config.trace_paths if path],
+        config.max_traces,
+    )
     trajectories = [load_trajectory(config.root, rollout) for rollout in rollout_dirs]
     validate_failed_trajectories(trajectories)
     prepare_output_dir(config)
+    trace_selection_for_manifest = _manifest_trace_selection(config, trace_selection)
+    write_json(config.output_dir / "trace_selection.json", trace_selection_for_manifest)
     bundle = build_evidence_bundle(config, task_text, skill_files, trajectories)
     write_json(config.output_dir / "input_bundle.json", bundle)
     (config.output_dir / "offline_skill_rca_prompt.txt").write_text(build_prompt_index(config, bundle), encoding="utf-8")
-    manifest = save_manifest(config, rollout_dirs)
+    manifest = save_manifest(config, rollout_dirs, trace_selection_for_manifest)
     status = compact_command_status(config.output_dir)
     return {"ok": True, "manifest": manifest, "status": status}
 
@@ -1681,6 +1703,7 @@ def collect_status(output_dir: Path) -> dict[str, Any]:
         "runDir": rel(output_dir),
         "exists": output_dir.exists(),
         "manifest": manifest,
+        "traceSelection": read_json(output_dir / "trace_selection.json") or manifest.get("traceSelection") or [],
         "inputBundle": path_info(output_dir / "input_bundle.json"),
         "stageOutputs": path_info(output_dir / "stage_outputs.json"),
         "finalReport": path_info(output_dir / "diagnosis_report.md"),

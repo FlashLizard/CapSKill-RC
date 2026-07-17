@@ -52,7 +52,7 @@
               <input id="stageVariant" class="input" placeholder="stage-debug-..." />
             </label>
             <label>
-              <span>最多轨迹</span>
+              <span>最多有效失败轨迹</span>
               <input id="stageMaxTraces" class="input" type="number" min="1" max="30" value="5" />
             </label>
             <label class="wide">
@@ -62,6 +62,9 @@
             <div class="wide repair-stage-infer-row">
               <button id="stageInferInputs" class="secondary-button" type="button">从轨迹推断 Task / Skills</button>
               <span id="stageInferStatus" class="muted"></span>
+            </div>
+            <div id="stageTraceSelection" class="wide repair-stage-trace-selection muted">
+              填写路径并点击推断后，这里会显示全部检测到的轨迹、排除原因以及最终选取的有效失败轨迹。
             </div>
             <label class="inline-check">
               <input id="stageForce" type="checkbox" />

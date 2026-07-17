@@ -414,11 +414,141 @@ def code_blocks(text: str) -> list[str]:
     return [block.strip()[:1800] for block in blocks[:8] if block.strip()]
 
 
-def discover_rollout_dirs(paths: list[Path], max_traces: int) -> list[Path]:
-    """从用户传入的路径中发现具体 rollout 目录。
+_TIMEOUT_TOKENS = (
+    "timeout",
+    "timed out",
+    "time limit",
+    "deadline exceeded",
+    "idle timeout",
+    "agent timeout",
+)
+_ENVIRONMENT_TOKENS = (
+    "environment",
+    "configuration",
+    "config error",
+    "infrastructure",
+    "sandbox",
+    "container",
+    "docker",
+    "image pull",
+    "permission denied",
+    "access denied",
+    "api key",
+    "authentication",
+    "unauthorized",
+    "forbidden",
+    "rate limit",
+    "quota",
+    "connection refused",
+    "network error",
+    "transport error",
+    "provider error",
+    "proxy error",
+)
+_TIMEOUT_CATEGORIES = {"timeout", "idle_timeout", "agent_timeout", "verifier_timeout"}
+_ENVIRONMENT_CATEGORIES = {
+    "environment",
+    "environment_error",
+    "configuration",
+    "configuration_error",
+    "config_error",
+    "infrastructure",
+    "infrastructure_error",
+    "sandbox",
+    "sandbox_error",
+    "setup_error",
+    "transport_error",
+    "api_error",
+    "authentication_error",
+    "permission_error",
+    "provider_error",
+    "network_error",
+    "quota_error",
+    "rate_limit",
+}
 
-    用户可能传 job 根目录、某个 run 目录，也可能直接传 rollout 目录。这里递归查找
-    ACP trajectory 文件，并按路径排序去重后选取前 ``max_traces`` 条。
+
+def _has_explicit_outcome(result: dict[str, Any]) -> bool:
+    """判断 result 是否给出了本地可确认的 0/1 运行结果。
+
+    缺少 outcome 的目录不能被当成失败轨迹：它可能只是尚未完成、导出中断或目录
+    结构不完整。这里仅识别 success/reward/score 这些字段是否存在且为标量，不读取
+    verifier 文件，也不把 verifier 结构复制给 repair LLM。
+    """
+    success = result.get("success")
+    if isinstance(success, (bool, int, float, str)) and str(success).strip() != "":
+        return True
+    rewards = result.get("rewards")
+    if isinstance(rewards, dict):
+        for key in ("reward", "score", "success"):
+            value = rewards.get(key)
+            if isinstance(value, (bool, int, float, str)) and str(value).strip() != "":
+                return True
+    for key in ("score", "score_excl_errors"):
+        value = result.get(key)
+        if isinstance(value, (bool, int, float, str)) and str(value).strip() != "":
+            return True
+    return False
+
+
+def _signal_text(result: dict[str, Any]) -> str:
+    """只拼接 agent/harness 运行错误字段，供本地分类使用。"""
+    values: list[str] = []
+    for key in (*AGENT_RUNTIME_SCALAR_FIELDS, *AGENT_RUNTIME_STRUCTURED_FIELDS):
+        value = result.get(key)
+        if value not in (None, "", [], {}):
+            values.append(str(value))
+    return " ".join(values).lower()
+
+
+def _category_text(result: dict[str, Any]) -> str:
+    value = result.get("error_category")
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def classify_rollout_for_repair(rollout_dir: Path) -> dict[str, Any]:
+    """给一条 rollout 做确定性的本地筛选分类。
+
+    选择条件是：必须有明确的 success=0/reward=0/score=0；同时不能是成功运行、
+    超时、环境/配置/API/基础设施类失败。返回的记录仅用于 Web/manifest 诊断，
+    不会被加入 ``input_bundle.json``，因此不会扩大 repair LLM 的可见信息。
+    """
+    result = read_json(rollout_dir / "result.json") or {}
+    if not isinstance(result, dict) or not _has_explicit_outcome(result):
+        return {
+            "rolloutDir": str(rollout_dir.resolve()),
+            "selected": False,
+            "reason": "missing_explicit_outcome",
+            "success": None,
+            "taskName": "",
+        }
+
+    success = success_from_result(result)
+    category = _category_text(result)
+    signal_text = _signal_text(result)
+    if success:
+        reason = "success"
+    elif category in _TIMEOUT_CATEGORIES or any(token in signal_text for token in _TIMEOUT_TOKENS):
+        reason = "timeout"
+    elif category in _ENVIRONMENT_CATEGORIES or any(token in signal_text for token in _ENVIRONMENT_TOKENS):
+        reason = "environment_or_configuration_error"
+    else:
+        reason = "task_failure"
+    return {
+        "rolloutDir": str(rollout_dir.resolve()),
+        "selected": reason == "task_failure",
+        "reason": reason,
+        "success": success,
+        "taskName": str(result.get("task_name") or ""),
+        "errorCategory": str(result.get("error_category") or ""),
+    }
+
+
+def discover_rollout_selection(paths: list[Path], max_traces: int) -> tuple[list[Path], list[dict[str, Any]]]:
+    """扫描全部 rollout，再筛选明确的非基础设施类失败并应用上限。
+
+    ``max_traces`` 是有效失败轨迹上限，不是扫描上限；因此成功、超时和环境错误
+    不会占用名额，也不会导致“少于五条就失败”。
     """
     found: list[Path] = []
     seen: set[Path] = set()
@@ -430,18 +560,34 @@ def discover_rollout_dirs(paths: list[Path], max_traces: int) -> list[Path]:
             candidates.append(input_path)
         for trajectory_path in sorted(input_path.rglob("trajectory/acp_trajectory.jsonl")):
             candidates.append(trajectory_path.parent.parent)
-        if not candidates:
-            for trajectory_path in sorted(input_path.rglob("agent/acp_trajectory.jsonl")):
-                candidates.append(trajectory_path.parent.parent)
+        for trajectory_path in sorted(input_path.rglob("agent/acp_trajectory.jsonl")):
+            candidates.append(trajectory_path.parent.parent)
         for candidate in sorted(candidates, key=lambda item: str(item)):
             resolved = candidate.resolve()
             if resolved in seen:
                 continue
             seen.add(resolved)
             found.append(resolved)
-    if len(found) < max_traces:
-        raise SystemExit(f"Expected {max_traces} failed trajectories, found {len(found)}")
-    return found[:max_traces]
+    records = [classify_rollout_for_repair(path) for path in sorted(found, key=lambda item: str(item))]
+    selected = [
+        Path(record["rolloutDir"])
+        for record in records
+        if record.get("selected")
+    ][: max(1, int(max_traces))]
+    for record in records:
+        record["selectedForRepair"] = bool(record.get("selected")) and Path(record["rolloutDir"]) in selected
+    if not selected:
+        raise SystemExit(
+            "No explicit task-failure trajectories found after excluding successful, timeout, "
+            "environment, and configuration-error rollouts"
+        )
+    return selected, records
+
+
+def discover_rollout_dirs(paths: list[Path], max_traces: int) -> list[Path]:
+    """兼容旧调用方，返回新的有效失败轨迹选择结果。"""
+    selected, _records = discover_rollout_selection(paths, max_traces)
+    return selected
 
 
 def load_trajectory(root: Path, rollout_dir: Path) -> Trajectory:
@@ -476,6 +622,11 @@ def success_from_result(result: dict[str, Any]) -> int:
         return 1 if success else 0
     if isinstance(success, (int, float)):
         return 1 if success > 0 else 0
+    if isinstance(success, str):
+        try:
+            return 1 if float(success.strip().rstrip("%")) > 0 else 0
+        except ValueError:
+            pass
     rewards = result.get("rewards")
     if isinstance(rewards, dict):
         for key in ("reward", "score", "success"):
@@ -484,6 +635,22 @@ def success_from_result(result: dict[str, Any]) -> int:
                 return 1 if value else 0
             if isinstance(value, (int, float)):
                 return 1 if value > 0 else 0
+            if isinstance(value, str):
+                try:
+                    return 1 if float(value.strip().rstrip("%")) > 0 else 0
+                except ValueError:
+                    pass
+    for key in ("score", "score_excl_errors"):
+        value = result.get(key)
+        if isinstance(value, bool):
+            return 1 if value else 0
+        if isinstance(value, (int, float)):
+            return 1 if value > 0 else 0
+        if isinstance(value, str):
+            try:
+                return 1 if float(value.strip().rstrip("%")) > 0 else 0
+            except ValueError:
+                pass
     return 0
 
 

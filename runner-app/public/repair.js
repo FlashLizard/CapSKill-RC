@@ -307,7 +307,7 @@ function repairPayload() {
     sourceSkillsLibraryId: elements.skillsLibrary.value,
     outputVariant: elements.variant.value.trim(),
     jobPaths: elements.jobPaths.value,
-    maxRollouts: Number(elements.maxRollouts.value || 6),
+    maxRollouts: Number(elements.maxRollouts.value || 5),
     force: elements.force.checked,
     judge: elements.judge.checked,
     strongProvider: elements.strongProvider.value,

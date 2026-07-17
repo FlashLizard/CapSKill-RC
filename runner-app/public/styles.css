@@ -2194,6 +2194,47 @@ body {
   line-height: 1.35;
 }
 
+.repair-stage-trace-selection {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+  padding-top: 2px;
+  line-height: 1.35;
+}
+
+.repair-stage-trace-selection-summary {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.repair-stage-trace-selection-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.repair-stage-trace-selection-item code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repair-stage-trace-selection-item.selected {
+  color: var(--success, #2f8f62);
+}
+
+.repair-stage-trace-selection-item.excluded {
+  color: var(--muted);
+}
+
+.repair-stage-trace-selection-mark {
+  font-weight: 700;
+  text-align: center;
+}
+
 .repair-stage-runbar {
   display: grid;
   grid-template-columns: minmax(220px, 0.9fr) minmax(340px, 1.2fr) auto auto auto;

@@ -607,7 +607,126 @@ async function nearestRolloutAncestor(startPath) {
   return null;
 }
 
-async function discoverRolloutDirsFromInput(inputPath, limit = 30) {
+const REPAIR_TIMEOUT_TOKENS = [
+  "timeout",
+  "timed out",
+  "time limit",
+  "deadline exceeded",
+  "idle timeout",
+  "agent timeout",
+];
+const REPAIR_ENVIRONMENT_TOKENS = [
+  "environment",
+  "configuration",
+  "config error",
+  "infrastructure",
+  "sandbox",
+  "container",
+  "docker",
+  "image pull",
+  "permission denied",
+  "access denied",
+  "api key",
+  "authentication",
+  "unauthorized",
+  "forbidden",
+  "rate limit",
+  "quota",
+  "connection refused",
+  "network error",
+  "transport error",
+  "provider error",
+  "proxy error",
+];
+const REPAIR_TIMEOUT_CATEGORIES = new Set(["timeout", "idle_timeout", "agent_timeout", "verifier_timeout"]);
+const REPAIR_ENVIRONMENT_CATEGORIES = new Set([
+  "environment", "environment_error", "configuration", "configuration_error", "config_error",
+  "infrastructure", "infrastructure_error", "sandbox", "sandbox_error", "setup_error",
+  "transport_error", "api_error", "authentication_error", "permission_error", "provider_error",
+  "network_error", "quota_error", "rate_limit",
+]);
+
+function repairNumericOutcome(value) {
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (typeof value === "number" && Number.isFinite(value)) return value > 0 ? 1 : 0;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim().replace(/%$/, ""));
+    if (Number.isFinite(parsed)) return parsed > 0 ? 1 : 0;
+  }
+  return null;
+}
+
+function repairExplicitOutcome(result) {
+  if (repairNumericOutcome(result?.success) !== null) return repairNumericOutcome(result.success);
+  const rewards = result?.rewards;
+  if (rewards && typeof rewards === "object") {
+    for (const key of ["reward", "score", "success"]) {
+      const value = repairNumericOutcome(rewards[key]);
+      if (value !== null) return value;
+    }
+  }
+  for (const key of ["score", "score_excl_errors"]) {
+    const value = repairNumericOutcome(result?.[key]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function repairSignalText(result) {
+  const fields = [
+    "error", "error_category", "export_error", "partial_trajectory", "trajectory_source",
+    "idle_timeout_info", "agent_timeout_info", "sandbox_startup_info", "transport_error_info",
+    "api_error_info", "suspected_api_error_info",
+  ];
+  return fields
+    .map((key) => result?.[key])
+    .filter((value) => value !== undefined && value !== null && value !== "")
+    .map((value) => typeof value === "string" ? value : JSON.stringify(value))
+    .join(" ")
+    .toLowerCase();
+}
+
+function repairErrorCategory(result) {
+  return String(result?.error_category || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[- ]/g, "_");
+}
+
+function classifyRolloutForRepair(result, rolloutDir) {
+  const outcome = repairExplicitOutcome(result);
+  if (outcome === null) {
+    return {
+      selected: false,
+      reason: "missing_explicit_outcome",
+      reasonLabel: "缺少明确 success/reward/score",
+      success: null,
+    };
+  }
+  const category = repairErrorCategory(result);
+  const signals = repairSignalText(result);
+  let reason = "task_failure";
+  let reasonLabel = "明确任务失败";
+  if (outcome === 1) {
+    reason = "success";
+    reasonLabel = "任务成功，不作为失败证据";
+  } else if (REPAIR_TIMEOUT_CATEGORIES.has(category) || REPAIR_TIMEOUT_TOKENS.some((token) => signals.includes(token))) {
+    reason = "timeout";
+    reasonLabel = "超时，不作为失败证据";
+  } else if (REPAIR_ENVIRONMENT_CATEGORIES.has(category) || REPAIR_ENVIRONMENT_TOKENS.some((token) => signals.includes(token))) {
+    reason = "environment_or_configuration_error";
+    reasonLabel = "环境/配置错误，不作为失败证据";
+  }
+  return {
+    selected: reason === "task_failure",
+    reason,
+    reasonLabel,
+    success: outcome,
+    errorCategory: String(result?.error_category || ""),
+  };
+}
+
+async function discoverRolloutDirsFromInput(inputPath, _limit = Number.POSITIVE_INFINITY) {
   const resolved = resolveArtifactPath(inputPath);
   const stat = await fsp.stat(resolved).catch(() => null);
   if (!stat) throw new Error(`Trace path does not exist: ${inputPath}`);
@@ -620,7 +739,7 @@ async function discoverRolloutDirsFromInput(inputPath, limit = 30) {
   const queue = [start];
   const seen = new Set();
   let scanned = 0;
-  while (queue.length && rollouts.length < limit && scanned < 4000) {
+  while (queue.length) {
     const dir = queue.shift();
     const key = path.resolve(dir);
     if (seen.has(key)) continue;
@@ -659,16 +778,27 @@ async function inferRepairStageInputs(body) {
   if (!tracePaths.length) throw new Error("At least one trace/job path is required");
 
   const warnings = [];
+  const selectionLimit = Math.min(Math.max(Number(body.maxTraces || 5), 1), 30);
   const rolloutMap = new Map();
   for (const tracePath of tracePaths) {
-    const found = await discoverRolloutDirsFromInput(tracePath, 30);
+    const discovered = await discoverRolloutDirsFromInput(tracePath);
+    const found = [];
+    for (const rolloutDir of discovered) {
+      if (
+        await exists(path.join(rolloutDir, "trajectory", "acp_trajectory.jsonl"))
+        || await exists(path.join(rolloutDir, "agent", "acp_trajectory.jsonl"))
+      ) {
+        found.push(rolloutDir);
+      }
+    }
     if (!found.length) warnings.push(`No rollout result found under ${tracePath}`);
     for (const rolloutDir of found) rolloutMap.set(toPosixRelative(rolloutDir), rolloutDir);
   }
 
   const rollouts = [];
-  for (const [relRollout, rolloutDir] of rolloutMap) {
+  for (const [relRollout, rolloutDir] of [...rolloutMap.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const result = await readJsonFileIfExists(path.join(rolloutDir, "result.json")) || {};
+    const selection = classifyRolloutForRepair(result, rolloutDir);
     const taskCandidates = taskCandidatesFromResult(result, rolloutDir);
     const preferredTask = taskCandidates[0] || null;
     const inferredLibrary = preferredTask ? inferLibraryForTask(preferredTask, result) : null;
@@ -692,23 +822,51 @@ async function inferRepairStageInputs(body) {
         reason: inferredLibrary.reason,
         observedPath: inferredLibrary.observedPath,
       } : null,
+      selection,
     });
   }
 
   if (!rollouts.length) {
-    return { ok: true, selected: null, rollouts, warnings: warnings.concat("未发现可用 rollout result.json。") };
+    return {
+      ok: true,
+      selected: null,
+      rollouts,
+      selectedRollouts: [],
+      candidateCount: 0,
+      eligibleCount: 0,
+      selectionLimit,
+      warnings: warnings.concat("未发现可用 rollout result.json。"),
+    };
   }
 
-  const taskKeys = [...new Set(rollouts.map((item) => item.taskCandidates[0]?.key).filter(Boolean))];
-  const libraryIds = [...new Set(rollouts.map((item) => item.inferredSkillsLibrary?.id).filter(Boolean))];
-  const libraryDirs = [...new Set(rollouts.map((item) => item.inferredSkillsLibrary?.skillsDir).filter(Boolean))];
+  const eligibleRollouts = rollouts.filter((item) => item.selection?.selected);
+  const selectedRollouts = eligibleRollouts.slice(0, selectionLimit);
+  for (const rollout of rollouts) {
+    rollout.selectedForRepair = selectedRollouts.includes(rollout);
+  }
+  if (!eligibleRollouts.length) {
+    return {
+      ok: true,
+      selected: null,
+      rollouts,
+      selectedRollouts: [],
+      candidateCount: rollouts.length,
+      eligibleCount: 0,
+      selectionLimit,
+      warnings: warnings.concat("未发现明确的任务失败轨迹；成功、超时和环境/配置错误已排除。"),
+    };
+  }
+
+  const taskKeys = [...new Set(selectedRollouts.map((item) => item.taskCandidates[0]?.key).filter(Boolean))];
+  const libraryIds = [...new Set(selectedRollouts.map((item) => item.inferredSkillsLibrary?.id).filter(Boolean))];
+  const libraryDirs = [...new Set(selectedRollouts.map((item) => item.inferredSkillsLibrary?.skillsDir).filter(Boolean))];
   if (taskKeys.length > 1) warnings.push(`轨迹包含多个 task 候选：${taskKeys.join(", ")}`);
   if (libraryIds.length > 1 || libraryDirs.length > 1) warnings.push(`轨迹包含多个 skills 库候选：${libraryDirs.join(", ")}`);
 
-  const first = rollouts[0];
+  const first = selectedRollouts[0];
   const selectedTask = taskKeys.length === 1 ? state.tasks.find((task) => task.key === taskKeys[0]) : null;
   const selectedLibrary = libraryIds.length <= 1 && libraryDirs.length <= 1 ? first.inferredSkillsLibrary : null;
-  const minConfidence = Math.min(...rollouts.map((item) => Number(item.inferredSkillsLibrary?.confidence || 0)));
+  const minConfidence = Math.min(...selectedRollouts.map((item) => Number(item.inferredSkillsLibrary?.confidence || 0)));
   const selected = selectedTask && selectedLibrary ? {
     taskKey: selectedTask.key,
     taskName: selectedTask.name,
@@ -727,6 +885,10 @@ async function inferRepairStageInputs(body) {
     ok: true,
     selected,
     rollouts,
+    selectedRollouts: selectedRollouts.map((item) => item.path),
+    candidateCount: rollouts.length,
+    eligibleCount: eligibleRollouts.length,
+    selectionLimit,
     warnings,
   };
 }
@@ -2422,7 +2584,7 @@ function normalizeRepairOptions(body) {
   resolveInsideRoot(outputSkillsDir);
   resolveInsideRoot(reportDir);
 
-  const maxRollouts = Math.min(Math.max(Number(body.maxRollouts || 6), 1), 30);
+  const maxRollouts = Math.min(Math.max(Number(body.maxRollouts || 5), 1), 30);
   const strongProvider = String(body.strongProvider || "anthropic").trim();
   const strongBaseUrl = String(body.strongBaseUrl || "https://api.camel-hub.com").trim();
   const strongModel = String(body.strongModel || "gpt-5.5").trim();

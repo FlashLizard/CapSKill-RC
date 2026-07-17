@@ -150,7 +150,6 @@ def rollout_from_dir(path: Path) -> RolloutInput | None:
 def discover_rollouts(paths: list[Path], max_rollouts: int) -> list[RolloutInput]:
     found: list[RolloutInput] = []
     seen: set[str] = set()
-    candidate_cap = max(max_rollouts * 8, max_rollouts)
 
     def add(rollout: RolloutInput | None) -> None:
         if not rollout:
@@ -175,13 +174,8 @@ def discover_rollouts(paths: list[Path], max_rollouts: int) -> list[RolloutInput
         elif path.is_dir():
             for trajectory in sorted(path.rglob("trajectory/acp_trajectory.jsonl")):
                 add(rollout_from_dir(trajectory.parent.parent))
-                if len(found) >= candidate_cap:
-                    break
         else:
             raise SystemExit(f"Unsupported job path: {safe_rel(path)}")
-
-        if len(found) >= candidate_cap:
-            break
 
     return select_rollouts(found, max_rollouts)
 
@@ -198,23 +192,74 @@ def rollout_passed(rollout: RolloutInput) -> bool:
     return str(score).strip() in {"1", "1.0", "100.0%", "100%"}
 
 
+def rollout_outcome(rollout: RolloutInput) -> int | None:
+    """读取本地明确 outcome；缺少 outcome 时返回 None。"""
+    result = read_json(rollout.result_path)
+    if not isinstance(result, dict):
+        return None
+    values: list[Any] = []
+    if "success" in result:
+        values.append(result.get("success"))
+    rewards = result.get("rewards")
+    if isinstance(rewards, dict):
+        values.extend(rewards.get(key) for key in ("reward", "score", "success") if key in rewards)
+    values.extend(result.get(key) for key in ("score", "score_excl_errors") if key in result)
+    for value in values:
+        if isinstance(value, bool):
+            return 1 if value else 0
+        if isinstance(value, (int, float)):
+            return 1 if value > 0 else 0
+        if isinstance(value, str):
+            try:
+                return 1 if float(value.strip().rstrip("%")) > 0 else 0
+            except ValueError:
+                continue
+    return None
+
+
+def rollout_exclusion_reason(rollout: RolloutInput) -> str | None:
+    """返回不应作为 repair 证据的原因；None 表示明确任务失败。"""
+    result = read_json(rollout.result_path)
+    if not isinstance(result, dict):
+        return "missing_explicit_outcome"
+    outcome = rollout_outcome(rollout)
+    if outcome is None:
+        return "missing_explicit_outcome"
+    if outcome == 1:
+        return "success"
+    category = str(result.get("error_category") or "").lower().replace("-", "_").replace(" ", "_")
+    fields = [
+        result.get(key)
+        for key in (
+            "error", "error_category", "export_error", "partial_trajectory", "trajectory_source",
+            "idle_timeout_info", "agent_timeout_info", "sandbox_startup_info", "transport_error_info",
+            "api_error_info", "suspected_api_error_info",
+        )
+        if result.get(key) not in (None, "", [], {})
+    ]
+    signal_text = " ".join(str(value) for value in fields).lower()
+    timeout_tokens = ("timeout", "timed out", "time limit", "deadline exceeded", "idle timeout", "agent timeout")
+    environment_tokens = (
+        "environment", "configuration", "config error", "infrastructure", "sandbox", "container", "docker",
+        "image pull", "permission denied", "access denied", "api key", "authentication", "unauthorized",
+        "forbidden", "rate limit", "quota", "connection refused", "network error", "transport error",
+        "provider error", "proxy error",
+    )
+    if category in {"timeout", "idle_timeout", "agent_timeout", "verifier_timeout"} or any(token in signal_text for token in timeout_tokens):
+        return "timeout"
+    if category in {
+        "environment", "environment_error", "configuration", "configuration_error", "config_error",
+        "infrastructure", "infrastructure_error", "sandbox", "sandbox_error", "setup_error", "transport_error",
+        "api_error", "authentication_error", "permission_error", "provider_error", "network_error", "quota_error",
+        "rate_limit",
+    } or any(token in signal_text for token in environment_tokens):
+        return "environment_or_configuration_error"
+    return None
+
+
 def select_rollouts(found: list[RolloutInput], max_rollouts: int) -> list[RolloutInput]:
-    if len(found) <= max_rollouts:
-        return found
-    passed = [rollout for rollout in found if rollout_passed(rollout)]
-    failed = [rollout for rollout in found if not rollout_passed(rollout)]
-    selected = failed[:max_rollouts]
-    if passed and not any(rollout_passed(rollout) for rollout in selected):
-        if len(selected) >= max_rollouts:
-            selected[-1] = passed[0]
-        else:
-            selected.append(passed[0])
-    for rollout in passed:
-        if len(selected) >= max_rollouts:
-            break
-        if rollout not in selected:
-            selected.append(rollout)
-    return selected[:max_rollouts]
+    eligible = [rollout for rollout in found if rollout_exclusion_reason(rollout) is None]
+    return eligible[: max(1, int(max_rollouts))]
 
 
 def find_default_source_skills(task_dir: Path) -> Path:
@@ -1281,7 +1326,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--task", required=True, help="Task directory, e.g. tasks/bike-rebalance")
     parser.add_argument("--source-skills-dir", help="Source skills dir. Defaults to skill-libraries/<task>/initial or task environment skills.")
     parser.add_argument("--job-path", action="append", default=[], help="Completed job/artifact/rollout directory or summary.json. Repeatable.")
-    parser.add_argument("--max-rollouts", type=int, default=8)
+    parser.add_argument("--max-rollouts", type=int, default=5)
     parser.add_argument("--variant", help="Output skill library variant name. Defaults to auto-repair-<timestamp>.")
     parser.add_argument("--output-skills-dir", help="Explicit output skills dir. Defaults to skill-libraries/<task>/<variant>.")
     parser.add_argument("--report-root", default="repair-runs", help="Directory for repair reports and manifests.")
