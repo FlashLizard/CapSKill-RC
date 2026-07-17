@@ -40,6 +40,7 @@ const elements = {
   statPassed: $("statPassed"),
   statFailed: $("statFailed"),
   agent: $("agent"),
+  provider: $("provider"),
   model: $("model"),
   baseUrl: $("baseUrl"),
   apiKey: $("apiKey"),
@@ -52,6 +53,7 @@ const elements = {
   repeats: $("repeats"),
   parallel: $("parallel"),
   skillMode: $("skillMode"),
+  reasoningEffort: $("reasoningEffort"),
   promptMode: $("promptMode"),
   skillsLibrary: $("skillsLibrary"),
   agentIdleTimeout: $("agentIdleTimeout"),
@@ -112,9 +114,13 @@ function loadModelConfigs() {
           id: String(item.id),
           name: String(item.name),
           agent: String(item.agent || "claude-agent-acp"),
+          provider: String(item.provider || "deepseek"),
           model: String(item.model || ""),
           baseUrl: String(item.baseUrl || ""),
           apiKey: typeof item.apiKey === "string" ? item.apiKey : "",
+          skillMode: String(item.skillMode || "with-skill"),
+          promptMode: String(item.promptMode || "standard"),
+          reasoningEffort: String(item.reasoningEffort || "off"),
           agentIdleTimeout: String(item.agentIdleTimeout ?? "0"),
           createdAt: item.createdAt || new Date().toISOString(),
           updatedAt: item.updatedAt || item.createdAt || new Date().toISOString(),
@@ -166,9 +172,13 @@ function currentModelConfigPayload(existing = null) {
     id: existing?.id || makeId("model-config"),
     name,
     agent: elements.agent.value,
+    provider: elements.provider.value,
     model: elements.model.value.trim(),
     baseUrl: elements.baseUrl.value.trim(),
     apiKey: elements.saveApiKey.checked ? elements.apiKey.value : "",
+    skillMode: elements.skillMode.value,
+    promptMode: elements.promptMode.value,
+    reasoningEffort: elements.reasoningEffort.value,
     agentIdleTimeout: elements.agentIdleTimeout.value.trim() || "0",
     createdAt: existing?.createdAt || now,
     updatedAt: now,
@@ -178,9 +188,13 @@ function currentModelConfigPayload(existing = null) {
 
 function applyModelConfig(config) {
   elements.agent.value = config.agent || "claude-agent-acp";
+  elements.provider.value = config.provider || "deepseek";
   elements.model.value = config.model || "";
   elements.baseUrl.value = config.baseUrl || "";
   elements.apiKey.value = config.apiKey || "";
+  elements.skillMode.value = config.skillMode || "with-skill";
+  elements.promptMode.value = config.promptMode || "standard";
+  elements.reasoningEffort.value = config.reasoningEffort || "off";
   elements.agentIdleTimeout.value = config.agentIdleTimeout || "0";
   elements.modelConfigName.value = config.name || "";
   elements.saveApiKey.checked = Boolean(config.apiKey);
@@ -398,7 +412,7 @@ function renderGroups() {
         <div class="group-row">
           <div>
             <div class="group-title">${escapeHtml(group.taskName)}</div>
-            <div class="group-subtitle">${escapeHtml(group.jobsRoot)} · ${escapeHtml(skillsLibraryDisplay(group))} · ${escapeHtml(promptModeLabel(group.promptMode))} · ${group.completed}/${group.total} · ${formatTime(group.createdAt)}</div>
+            <div class="group-subtitle">${escapeHtml(group.jobsRoot)} · ${escapeHtml(group.provider || "-")}/${escapeHtml(group.model || "-")} · ${escapeHtml(group.skillMode || "with-skill")} · ${escapeHtml(promptModeLabel(group.promptMode))} · ${group.completed}/${group.total} · ${formatTime(group.createdAt)}</div>
           </div>
           ${runStatusBadge(displayStatus)}
           <button class="icon-button" title="停止运行组" data-stop-group="${escapeHtml(group.id)}">■</button>
@@ -426,7 +440,7 @@ function renderRuns() {
           <div>#${run.runNo}</div>
           <div>
             <div>${escapeHtml(run.taskName)}</div>
-            <div class="run-path">${escapeHtml(run.jobsDir)} · ${escapeHtml(skillsLibraryDisplay(run))} · ${escapeHtml(promptModeLabel(run.promptMode))}</div>
+            <div class="run-path">${escapeHtml(run.jobsDir)} · ${escapeHtml(run.provider || "-")}/${escapeHtml(run.model || "-")} · ${escapeHtml(run.skillMode || "with-skill")} · ${escapeHtml(skillsLibraryDisplay(run))} · ${escapeHtml(promptModeLabel(run.promptMode))}</div>
           </div>
           <div>${runStatusBadge(run.status)}</div>
           <div>${escapeHtml(score)}</div>
@@ -804,13 +818,15 @@ async function startRun() {
   const body = {
     taskKey: task.key,
     agent: elements.agent.value,
+    provider: elements.provider.value,
     model: elements.model.value,
     baseUrl: elements.baseUrl.value,
     apiKey: elements.apiKey.value,
     repeats: Number(elements.repeats.value || 1),
     parallel: Number(elements.parallel.value || 1),
     skillMode: elements.skillMode.value,
-    promptMode: elements.promptMode.value,
+    promptMode: elements.skillMode.value === "force-skill" ? "force-all-skills" : elements.promptMode.value,
+    reasoningEffort: elements.reasoningEffort.value,
     skillsLibraryId: selectedSkillsLibrary(task)?.id || elements.skillsLibrary.value,
     agentIdleTimeout: elements.agentIdleTimeout.value,
     jobsRoot: elements.jobsRoot.value,
@@ -926,7 +942,32 @@ for (const el of [
 }
 
 elements.historySearch.addEventListener("input", renderHistory);
-elements.skillMode.addEventListener("change", renderAll);
+
+function syncSkillModeControls() {
+  const force = elements.skillMode.value === "force-skill";
+  elements.promptMode.disabled = force;
+  if (force) elements.promptMode.value = "force-all-skills";
+  else if (elements.promptMode.value === "force-all-skills") elements.promptMode.value = "standard";
+  elements.skillsLibrary.disabled = elements.skillMode.value === "no-skill";
+}
+
+elements.skillMode.addEventListener("change", () => {
+  syncSkillModeControls();
+  renderAll();
+});
+elements.provider.addEventListener("change", () => {
+  const defaults = {
+    deepseek: "https://api.deepseek.com/anthropic",
+    anthropic: "https://api.anthropic.com",
+    openai: "https://api.openai.com/v1",
+    custom: "",
+  };
+  const current = elements.baseUrl.value.trim();
+  if (!current || Object.values(defaults).includes(current)) {
+    elements.baseUrl.value = defaults[elements.provider.value] || "";
+  }
+});
+elements.reasoningEffort.addEventListener("change", renderAll);
 elements.promptMode.addEventListener("change", renderAll);
 elements.skillsLibrary.addEventListener("change", () => {
   state.selectedSkillsLibraryId = elements.skillsLibrary.value;
@@ -935,6 +976,7 @@ elements.skillsLibrary.addEventListener("change", () => {
 
 loadModelConfigs();
 renderModelConfigs();
+syncSkillModeControls();
 connectEvents();
 await fetchTasks();
 await fetchHistory();

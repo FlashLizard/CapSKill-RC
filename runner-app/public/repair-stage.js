@@ -533,6 +533,7 @@ const els = {
   inferStatus: $("stageInferStatus"),
   force: $("stageForce"),
   strongModel: $("stageStrongModel"),
+  strongReasoningEffort: $("stageStrongReasoningEffort"),
   strongBaseUrl: $("stageStrongBaseUrl"),
   strongApiKey: $("stageStrongApiKey"),
   maxPromptChars: $("stageMaxPromptChars"),
@@ -543,6 +544,7 @@ const els = {
   stage7SkillPackageSize: $("stage7SkillPackageSize"),
   separateReviewLlm: $("stageSeparateReviewLlm"),
   reviewModel: $("stageReviewModel"),
+  reviewReasoningEffort: $("stageReviewReasoningEffort"),
   reviewBaseUrl: $("stageReviewBaseUrl"),
   reviewApiKey: $("stageReviewApiKey"),
   addSkillMergeThreshold: $("stageAddSkillMergeThreshold"),
@@ -685,7 +687,7 @@ function syncStage7OptionControls() {
   const packageMode = els.stage7RepairMode.value === "skill_package";
   els.stage7SkillPackageSize.disabled = !packageMode;
   const separateReview = els.separateReviewLlm.checked;
-  for (const field of [els.reviewModel, els.reviewBaseUrl, els.reviewApiKey]) {
+  for (const field of [els.reviewModel, els.reviewBaseUrl, els.reviewApiKey, els.reviewReasoningEffort]) {
     field.disabled = !separateReview;
   }
 }
@@ -699,6 +701,7 @@ function presetSettingsFromForm() {
     tracePaths: els.tracePaths.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
     force: els.force.checked,
     strongModel: els.strongModel.value.trim(),
+    strongReasoningEffort: els.strongReasoningEffort.value,
     strongBaseUrl: els.strongBaseUrl.value.trim(),
     strongApiKey: els.strongApiKey.value,
     traceAnalysisWorkers: Number(els.traceWorkers.value || 5),
@@ -713,6 +716,7 @@ function presetSettingsFromForm() {
     skillWordLimit: Number(els.skillWordLimit.value || 1200),
     separateReviewLlm: els.separateReviewLlm.checked,
     reviewModel: els.reviewModel.value.trim(),
+    reviewReasoningEffort: els.reviewReasoningEffort.value,
     reviewBaseUrl: els.reviewBaseUrl.value.trim(),
     reviewApiKey: els.reviewApiKey.value,
   };
@@ -747,6 +751,7 @@ function applyPresetSettings(settings) {
   els.tracePaths.value = asArray(settings.tracePaths).join("\n");
   els.force.checked = Boolean(settings.force);
   els.strongModel.value = settings.strongModel || "";
+  els.strongReasoningEffort.value = settings.strongReasoningEffort || "minimal";
   els.strongBaseUrl.value = settings.strongBaseUrl || "";
   els.strongApiKey.value = settings.strongApiKey || "";
   els.traceWorkers.value = settings.traceAnalysisWorkers || 5;
@@ -761,6 +766,7 @@ function applyPresetSettings(settings) {
   els.skillWordLimit.value = settings.skillWordLimit || 1200;
   els.separateReviewLlm.checked = Boolean(settings.separateReviewLlm);
   els.reviewModel.value = settings.reviewModel || "";
+  els.reviewReasoningEffort.value = settings.reviewReasoningEffort || "minimal";
   els.reviewBaseUrl.value = settings.reviewBaseUrl || "";
   els.reviewApiKey.value = settings.reviewApiKey || "";
   syncStage7OptionControls();
@@ -808,6 +814,7 @@ function currentPayload(extra = {}) {
     outputSkillsDir: currentRunDir().replace(/^repair-runs\//, "skill-libraries/"),
     strongBaseUrl: els.strongBaseUrl.value.trim(),
     strongModel: els.strongModel.value.trim(),
+    strongReasoningEffort: els.strongReasoningEffort.value,
     strongApiKey: els.strongApiKey.value.trim(),
     maxPromptChars: Number(els.maxPromptChars.value || 220000),
     traceAnalysisWorkers: Number(els.traceWorkers.value || 5),
@@ -817,6 +824,7 @@ function currentPayload(extra = {}) {
     stage7SkillPackageSize: Number(els.stage7SkillPackageSize.value || 3),
     separateReviewLlm: els.separateReviewLlm.checked,
     reviewModel: els.reviewModel.value.trim(),
+    reviewReasoningEffort: els.reviewReasoningEffort.value,
     reviewBaseUrl: els.reviewBaseUrl.value.trim(),
     reviewApiKey: els.reviewApiKey.value.trim(),
     addSkillMergeThreshold: Number(els.addSkillMergeThreshold.value || 0),

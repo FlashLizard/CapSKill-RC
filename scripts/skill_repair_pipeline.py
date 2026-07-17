@@ -1291,6 +1291,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--strong-provider", choices=["anthropic", "openai"], default="anthropic")
     parser.add_argument("--strong-base-url", default=os.getenv("STRONG_LLM_BASE_URL") or os.getenv("ANTHROPIC_BASE_URL") or DEFAULT_STRONG_BASE_URL)
     parser.add_argument("--strong-model", default=os.getenv("STRONG_LLM_MODEL") or DEFAULT_STRONG_MODEL)
+    parser.add_argument(
+        "--strong-reasoning-effort",
+        choices=["off", "minimal", "low", "medium", "high", "max", "xhigh"],
+        default=os.getenv("STRONG_LLM_REASONING_EFFORT") or "off",
+        help="Reasoning/thinking intensity sent to the selected repair provider.",
+    )
     parser.add_argument("--strong-api-key", default=os.getenv("STRONG_LLM_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENAI_API_KEY"))
     parser.add_argument("--strong-max-tokens", type=int, default=8000)
     parser.add_argument("--strong-timeout", type=float, default=240)
@@ -1330,6 +1336,7 @@ def main() -> int:
         "provider": args.strong_provider,
         "baseUrl": args.strong_base_url,
         "model": args.strong_model,
+        "reasoningEffort": args.strong_reasoning_effort,
         "apiKey": args.strong_api_key,
         "maxTokens": min(args.strong_max_tokens, 3000),
         "timeout": args.strong_timeout,
@@ -1339,6 +1346,7 @@ def main() -> int:
         "provider": args.strong_provider,
         "baseUrl": args.strong_base_url,
         "model": args.strong_model,
+        "reasoningEffort": args.strong_reasoning_effort,
         "apiKey": args.strong_api_key,
         "maxTokens": min(args.strong_max_tokens, 2400),
         "timeout": args.strong_timeout,
@@ -1431,6 +1439,7 @@ def main() -> int:
         "provider": args.strong_provider,
         "baseUrl": args.strong_base_url,
         "model": args.strong_model,
+        "reasoningEffort": args.strong_reasoning_effort,
         "apiKey": args.strong_api_key,
         "maxTokens": args.strong_max_tokens,
         "timeout": args.strong_timeout,

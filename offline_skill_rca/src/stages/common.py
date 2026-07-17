@@ -89,6 +89,11 @@ def make_llm(config: Any, transcript_name: str, llm_role: str = "repair") -> LLM
         if separate_review
         else config.strong_model
     )
+    reasoning_effort = (
+        getattr(config, "review_reasoning_effort", "") or getattr(config, "strong_reasoning_effort", "")
+        if separate_review
+        else getattr(config, "strong_reasoning_effort", "")
+    )
     return LLMClient(
         base_url,
         api_key,
@@ -99,6 +104,7 @@ def make_llm(config: Any, transcript_name: str, llm_role: str = "repair") -> LLM
         max_retries_env_key="OFFLINE_SKILL_RCA_STAGE3_MAX_RETRIES" if is_stage3_trace else None,
         transcript_dir=config.output_dir / "llm_transcript",
         transcript_name=transcript_name,
+        reasoning_effort=reasoning_effort,
     )
 
 

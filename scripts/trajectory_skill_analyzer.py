@@ -617,6 +617,10 @@ def call_llm_json(prompt: str, config: dict[str, Any], default_max_tokens: int, 
     max_tokens = int(config.get("maxTokens") or default_max_tokens)
     retry_env = os.getenv("STRONG_LLM_RETRIES") or os.getenv("LLM_RETRIES")
     attempts = int(config.get("retries") or retry_env or 3)
+    reasoning_effort = str(config.get("reasoningEffort") or os.getenv("STRONG_LLM_REASONING_EFFORT") or "off").strip().lower()
+    if reasoning_effort == "minimal" and ("deepseek" in f"{model} {base_url}".lower()):
+        reasoning_effort = "low"
+    reasoning_budgets = {"minimal": 1024, "low": 2048, "medium": 4096, "high": 8192, "max": 16384, "xhigh": 24576}
 
     if provider == "openai":
         url = normalize_base_url(base_url, "/chat/completions")
@@ -630,6 +634,8 @@ def call_llm_json(prompt: str, config: dict[str, Any], default_max_tokens: int, 
                 {"role": "user", "content": prompt},
             ],
         }
+        if reasoning_effort not in {"", "off", "none", "false"}:
+            payload["reasoning_effort"] = reasoning_effort
         status, raw, elapsed, attempt_records = post_json_with_retries(url, headers, payload, timeout, attempts)
         data = extract_json_object(raw)
         content = ""
@@ -649,6 +655,8 @@ def call_llm_json(prompt: str, config: dict[str, Any], default_max_tokens: int, 
             "temperature": 0,
             "messages": [{"role": "user", "content": prompt}],
         }
+        if reasoning_effort in reasoning_budgets:
+            payload["thinking"] = {"type": "enabled", "budget_tokens": reasoning_budgets[reasoning_effort]}
         status, raw, elapsed, attempt_records = post_json_with_retries(url, headers, payload, timeout, attempts)
         data = extract_json_object(raw)
         content = ""

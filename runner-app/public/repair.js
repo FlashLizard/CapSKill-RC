@@ -22,6 +22,7 @@ const elements = {
   judge: $("repairJudge"),
   strongProvider: $("repairStrongProvider"),
   strongModel: $("repairStrongModel"),
+  strongReasoningEffort: $("repairStrongReasoningEffort"),
   strongBaseUrl: $("repairStrongBaseUrl"),
   strongMaxTokens: $("repairStrongMaxTokens"),
   strongTimeout: $("repairStrongTimeout"),
@@ -67,6 +68,7 @@ function saveConfig() {
   localStorage.setItem(CONFIG_KEY, JSON.stringify({
     strongProvider: elements.strongProvider.value,
     strongModel: elements.strongModel.value,
+    strongReasoningEffort: elements.strongReasoningEffort.value,
     strongBaseUrl: elements.strongBaseUrl.value,
     strongMaxTokens: elements.strongMaxTokens.value,
     strongTimeout: elements.strongTimeout.value,
@@ -80,6 +82,7 @@ function loadConfig() {
     const config = JSON.parse(localStorage.getItem(CONFIG_KEY) || "{}");
     if (config.strongProvider) elements.strongProvider.value = config.strongProvider;
     if (config.strongModel) elements.strongModel.value = config.strongModel;
+    if (config.strongReasoningEffort) elements.strongReasoningEffort.value = config.strongReasoningEffort;
     if (config.strongBaseUrl) elements.strongBaseUrl.value = config.strongBaseUrl;
     if (config.strongMaxTokens) elements.strongMaxTokens.value = config.strongMaxTokens;
     if (config.strongTimeout) elements.strongTimeout.value = config.strongTimeout;
@@ -309,6 +312,7 @@ function repairPayload() {
     judge: elements.judge.checked,
     strongProvider: elements.strongProvider.value,
     strongModel: elements.strongModel.value.trim(),
+    strongReasoningEffort: elements.strongReasoningEffort.value,
     strongBaseUrl: elements.strongBaseUrl.value.trim(),
     strongApiKey: elements.strongApiKey.value.trim(),
     strongMaxTokens: Number(elements.strongMaxTokens.value || 8000),
@@ -389,6 +393,7 @@ elements.stop.addEventListener("click", stopRepair);
 for (const item of [
   elements.strongProvider,
   elements.strongModel,
+  elements.strongReasoningEffort,
   elements.strongBaseUrl,
   elements.strongMaxTokens,
   elements.strongTimeout,

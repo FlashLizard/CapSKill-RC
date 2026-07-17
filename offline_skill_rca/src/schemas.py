@@ -119,6 +119,10 @@ class OfflineSkillRCAConfig:
     review_base_url: str = ""
     review_api_key: str = ""
     review_model: str = ""
+    # Repair 与 Review 可以分别选择思维强度。off 表示不向兼容网关发送
+    # reasoning_effort；minimal/low/medium/high/max/xhigh 由客户端按供应商规范化。
+    strong_reasoning_effort: str = "minimal"
+    review_reasoning_effort: str = "minimal"
     max_traces: int = 5
     max_prompt_chars: int = 170_000
     trace_analysis_workers: int = 5

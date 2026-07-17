@@ -83,13 +83,20 @@ def run_bench(args: argparse.Namespace) -> int:
             skills = root() / skills
         command.extend(["--skills-dir", str(skills)])
     if args.skill_mode:
-        command.extend(["--skill-mode", args.skill_mode])
+        effective_skill_mode = "with-skill" if args.skill_mode == "force-skill" else args.skill_mode
+        command.extend(["--skill-mode", effective_skill_mode])
     if args.reasoning_effort:
         command.extend(["--reasoning-effort", args.reasoning_effort])
     env = os.environ.copy()
     if args.base_url:
         env["BENCHFLOW_PROVIDER_BASE_URL"] = args.base_url
         env["ANTHROPIC_BASE_URL"] = args.base_url
+    env["BENCHFLOW_PROVIDER_TYPE"] = args.provider
+    env["SKILLSBENCH_PROVIDER"] = args.provider
+    if args.skill_mode == "force-skill":
+        # 命令行工具不能自动改写 task 目录；这个环境变量供支持该约定的
+        # BenchFlow/agent 适配器读取，同时明确把实际 CLI skill mode 保持为 with-skill。
+        env["SKILLSBENCH_PROMPT_MODE"] = "force-all-skills"
     if args.api_key:
         env["BENCHFLOW_PROVIDER_API_KEY"] = args.api_key
         env["ANTHROPIC_API_KEY"] = args.api_key
@@ -109,7 +116,18 @@ def parse_args() -> argparse.Namespace:
     run_parser.add_argument("--agent", default="claude-agent-acp")
     run_parser.add_argument("--model", required=True)
     run_parser.add_argument("--skills-dir")
-    run_parser.add_argument("--skill-mode", default="normal")
+    run_parser.add_argument(
+        "--skill-mode",
+        choices=["no-skill", "with-skill", "force-skill"],
+        default="with-skill",
+        help="no-skill 不注入 skill；with-skill 正常提供；force-skill 要求适配器强制调用全部 skill。",
+    )
+    run_parser.add_argument(
+        "--provider",
+        choices=["deepseek", "anthropic", "openai", "custom"],
+        default=os.getenv("BENCHFLOW_PROVIDER_TYPE", "deepseek"),
+        help="供应商标签；实际兼容协议由 --base-url 与 harness 决定。",
+    )
     run_parser.add_argument("--jobs-dir", default="jobs/local")
     run_parser.add_argument("--concurrency", type=int, default=1)
     run_parser.add_argument("--base-url", default=os.getenv("BENCHFLOW_PROVIDER_BASE_URL", ""))

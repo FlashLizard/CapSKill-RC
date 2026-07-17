@@ -77,10 +77,19 @@ python3 tools/llm_probe.py \
 python3 tools/bench.py run \
   --task r2r-mpc-control \
   --agent claude-agent-acp \
+  --provider deepseek \
   --model deepseek-v4-flash \
   --skills-dir skill-libraries/r2r-mpc-control/initial \
+  --skill-mode with-skill \
+  --reasoning-effort low \
   --jobs-dir jobs/local-r2r
 ```
+
+评测 Web 页支持 `deepseek`、`anthropic`、`openai`、`custom` 四类供应商标签，以及
+`no-skill`、`with-skill`、`force-skill` 三种模式。Claude Code 使用自定义供应商时，
+`Base URL` 必须提供 Anthropic Messages 兼容入口；API key 可以只在当前表单使用，也可以
+选择保存到浏览器配置。思维强度可选 `off`、`minimal`、`low`、`medium`、`high`、`max`、`xhigh`。
+`force-skill` 会自动启用全部 skill 的 prompt overlay，并向 BenchFlow 传递 `with-skill`。
 
 重复运行、并行度、force skills、轨迹查看和 group 管理优先使用 Web 控制台；CLI 适合 Linux CI 或脚本化实验。
 

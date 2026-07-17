@@ -57,6 +57,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--review-base-url", default=os.getenv("OFFLINE_SKILL_RCA_REVIEW_BASE_URL") or "")
     parser.add_argument("--review-api-key", default=os.getenv("OFFLINE_SKILL_RCA_REVIEW_API_KEY") or "")
     parser.add_argument("--review-model", default=os.getenv("OFFLINE_SKILL_RCA_REVIEW_MODEL") or "")
+    parser.add_argument(
+        "--strong-reasoning-effort",
+        choices=["off", "minimal", "low", "medium", "high", "max", "xhigh"],
+        default=os.getenv("OFFLINE_SKILL_RCA_REASONING_EFFORT") or "minimal",
+        help="Repair LLM thinking intensity; off omits reasoning fields.",
+    )
+    parser.add_argument(
+        "--review-reasoning-effort",
+        choices=["off", "minimal", "low", "medium", "high", "max", "xhigh"],
+        default=os.getenv("OFFLINE_SKILL_RCA_REVIEW_REASONING_EFFORT") or "minimal",
+        help="Review LLM thinking intensity when a separate Review LLM is enabled.",
+    )
     parser.add_argument("--max-traces", type=int, default=5)
     parser.add_argument("--max-prompt-chars", type=int, default=220_000)
     parser.add_argument(
@@ -143,6 +155,8 @@ def main() -> int:
         review_base_url=args.review_base_url,
         review_api_key=args.review_api_key,
         review_model=args.review_model,
+        strong_reasoning_effort=args.strong_reasoning_effort,
+        review_reasoning_effort=args.review_reasoning_effort,
         max_traces=args.max_traces,
         max_prompt_chars=args.max_prompt_chars,
         trace_analysis_workers=args.trace_analysis_workers,

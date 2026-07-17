@@ -33,6 +33,7 @@ class LLMClient:
     max_retries_env_key: str | None = None
     transcript_dir: Path | None = None
     transcript_name: str = "stage-llm"
+    reasoning_effort: str = ""
 
     def chat_json(self, system: str, user: str, max_tokens: int = 24_000) -> dict[str, Any]:
         """发送一次对话请求，并强制解析 JSON 返回。
@@ -52,7 +53,10 @@ class LLMClient:
             "temperature": 0.1,
             "max_tokens": max_tokens,
         }
-        raw_reasoning_effort = os.getenv("OFFLINE_SKILL_RCA_REASONING_EFFORT", "minimal").strip()
+        raw_reasoning_effort = (
+            self.reasoning_effort
+            or os.getenv("OFFLINE_SKILL_RCA_REASONING_EFFORT", "minimal")
+        ).strip()
         reasoning_effort = normalize_reasoning_effort(
             raw_reasoning_effort,
             base_url=self.base_url,

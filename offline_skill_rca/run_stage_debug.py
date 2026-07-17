@@ -239,6 +239,14 @@ def build_config(args: argparse.Namespace, manifest: dict[str, Any] | None = Non
         or os.getenv("OFFLINE_SKILL_RCA_REVIEW_MODEL")
         or (manifest or {}).get("reviewModel")
         or "",
+        strong_reasoning_effort=getattr(args, "strong_reasoning_effort", None)
+        or os.getenv("OFFLINE_SKILL_RCA_REASONING_EFFORT")
+        or (manifest or {}).get("strongReasoningEffort")
+        or "minimal",
+        review_reasoning_effort=getattr(args, "review_reasoning_effort", None)
+        or os.getenv("OFFLINE_SKILL_RCA_REVIEW_REASONING_EFFORT")
+        or (manifest or {}).get("reviewReasoningEffort")
+        or "minimal",
         max_traces=int(getattr(args, "max_traces", None) or (manifest or {}).get("maxTraces") or 5),
         max_prompt_chars=int(getattr(args, "max_prompt_chars", None) or (manifest or {}).get("maxPromptChars") or 220_000),
         trace_analysis_workers=int(
@@ -357,9 +365,11 @@ def persist_runtime_options(config: OfflineSkillRCAConfig) -> None:
         {
             "strongBaseUrl": config.strong_base_url,
             "strongModel": config.strong_model,
+            "strongReasoningEffort": config.strong_reasoning_effort,
             "separateReviewLlm": config.use_separate_review_llm,
             "reviewBaseUrl": config.review_base_url if config.use_separate_review_llm else "",
             "reviewModel": config.review_model if config.use_separate_review_llm else "",
+            "reviewReasoningEffort": config.review_reasoning_effort if config.use_separate_review_llm else "",
             "stage7MaxOperations": config.stage7_max_operations,
             "stage7RepairMode": config.stage7_repair_mode,
             "stage7SkillPackageSize": config.stage7_skill_package_size,
@@ -381,9 +391,11 @@ def save_manifest(config: OfflineSkillRCAConfig, rollout_dirs: list[Path]) -> di
         "rolloutDirs": [rel(path) for path in rollout_dirs],
         "strongBaseUrl": config.strong_base_url,
         "strongModel": config.strong_model,
+        "strongReasoningEffort": config.strong_reasoning_effort,
         "separateReviewLlm": config.use_separate_review_llm,
         "reviewBaseUrl": config.review_base_url if config.use_separate_review_llm else "",
         "reviewModel": config.review_model if config.use_separate_review_llm else "",
+        "reviewReasoningEffort": config.review_reasoning_effort if config.use_separate_review_llm else "",
         "maxTraces": config.max_traces,
         "maxPromptChars": config.max_prompt_chars,
         "traceAnalysisWorkers": config.trace_analysis_workers,
@@ -1793,12 +1805,20 @@ def parse_args() -> argparse.Namespace:
         p.add_argument("--strong-base-url")
         p.add_argument("--strong-api-key")
         p.add_argument("--strong-model")
+        p.add_argument(
+            "--strong-reasoning-effort",
+            choices=["off", "minimal", "low", "medium", "high", "max", "xhigh"],
+        )
         p.add_argument("--use-separate-review-llm", dest="use_separate_review_llm", action="store_true")
         p.add_argument("--no-separate-review-llm", dest="use_separate_review_llm", action="store_false")
         p.set_defaults(use_separate_review_llm=None)
         p.add_argument("--review-base-url")
         p.add_argument("--review-api-key")
         p.add_argument("--review-model")
+        p.add_argument(
+            "--review-reasoning-effort",
+            choices=["off", "minimal", "low", "medium", "high", "max", "xhigh"],
+        )
         p.add_argument("--max-prompt-chars", type=int)
         p.add_argument("--trace-analysis-workers", type=int)
         p.add_argument("--add-skill-merge-threshold", type=int)

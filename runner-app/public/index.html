@@ -102,6 +102,15 @@
               </select>
             </label>
             <label>
+              <span>供应商协议</span>
+              <select id="provider" class="input" title="Claude Code 需要供应商提供 Anthropic Messages 兼容入口">
+                <option value="deepseek">DeepSeek 兼容</option>
+                <option value="anthropic">Anthropic 兼容</option>
+                <option value="openai">OpenAI 兼容网关</option>
+                <option value="custom">自定义供应商</option>
+              </select>
+            </label>
+            <label>
               <span>模型</span>
               <input id="model" class="input" value="deepseek-v4-flash" />
             </label>
@@ -124,8 +133,21 @@
             <label>
               <span>Skill 模式</span>
               <select id="skillMode" class="input">
-                <option value="with-skill">with-skill</option>
                 <option value="no-skill">no-skill</option>
+                <option value="with-skill">with-skill</option>
+                <option value="force-skill">force-skill</option>
+              </select>
+            </label>
+            <label>
+              <span>思维强度</span>
+              <select id="reasoningEffort" class="input">
+                <option value="off">关闭</option>
+                <option value="minimal">minimal</option>
+                <option value="low" selected>low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="max">max</option>
+                <option value="xhigh">xhigh</option>
               </select>
             </label>
             <label>

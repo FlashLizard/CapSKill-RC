@@ -29,6 +29,9 @@ const MAX_REPAIR_TEXT_BYTES = 1_500_000;
 const MAX_REPAIR_JSON_BYTES = 8_000_000;
 const PROMPT_MODE_STANDARD = "standard";
 const PROMPT_MODE_FORCE_ALL_SKILLS = "force-all-skills";
+const PROVIDER_TYPES = new Set(["deepseek", "anthropic", "openai", "custom"]);
+const SKILL_MODES = new Set(["no-skill", "with-skill", "force-skill"]);
+const REASONING_EFFORTS = new Set(["off", "minimal", "low", "medium", "high", "max", "xhigh"]);
 const FORCE_ALL_SKILLS_PROMPT_PATH = path.join(APP_DIR, "prompts", "force-all-skills.md");
 const STOP_AUDIT_PATH = path.join(ROOT, "jobs", "web-runner", "runner-stop-audit.log");
 const REPAIR_STAGE_PRESET_PATH = path.join(ROOT, ".runner-config", "repair-stage-presets.json");
@@ -67,6 +70,40 @@ function resolveInsideRoot(relPath) {
 function normalizePromptMode(value) {
   const mode = String(value || PROMPT_MODE_STANDARD).trim();
   return mode === PROMPT_MODE_FORCE_ALL_SKILLS ? mode : PROMPT_MODE_STANDARD;
+}
+
+function normalizeProvider(value) {
+  const provider = String(value || "deepseek").trim().toLowerCase();
+  if (!PROVIDER_TYPES.has(provider)) {
+    throw new Error(`Unsupported provider: ${provider}`);
+  }
+  return provider;
+}
+
+function normalizeSkillMode(value) {
+  const mode = String(value || "with-skill").trim().toLowerCase();
+  if (!SKILL_MODES.has(mode)) {
+    throw new Error(`Unsupported skill mode: ${mode}`);
+  }
+  return mode;
+}
+
+function normalizeReasoningEffort(value) {
+  const effort = String(value || "off").trim().toLowerCase();
+  if (!REASONING_EFFORTS.has(effort)) {
+    throw new Error(`Unsupported reasoning effort: ${effort}`);
+  }
+  // DeepSeek-compatible endpoints reject the OpenAI-style "minimal" enum.
+  // Keep the UI option for other providers, but map it before the BenchFlow CLI.
+  return effort;
+}
+
+function effectiveReasoningEffort(provider, model, baseUrl, effort) {
+  const normalized = normalizeReasoningEffort(effort);
+  if (normalized === "off") return "";
+  const target = `${provider} ${model} ${baseUrl}`.toLowerCase();
+  if (normalized === "minimal" && (provider === "deepseek" || target.includes("deepseek"))) return "low";
+  return normalized;
 }
 
 function listSkillNamesSync(skillsDir) {
@@ -775,6 +812,11 @@ function publicRun(run) {
     startedAt: run.startedAt,
     endedAt: run.endedAt,
     jobsDir: run.jobsDir,
+    provider: run.provider,
+    baseUrl: run.baseUrl,
+    model: run.model,
+    skillMode: run.skillMode,
+    effectiveSkillMode: run.effectiveSkillMode,
     promptMode: run.promptMode,
     reasoningEffort: run.reasoningEffort,
     agentTimeoutSec: run.agentTimeoutSec,
@@ -804,7 +846,11 @@ function publicGroup(group) {
     repeats: group.repeats,
     parallel: group.parallel,
     agent: group.agent,
+    provider: group.provider,
+    baseUrl: group.baseUrl,
     model: group.model,
+    skillMode: group.skillMode,
+    effectiveSkillMode: group.effectiveSkillMode,
     promptMode: group.promptMode,
     reasoningEffort: group.reasoningEffort,
     agentTimeoutSec: group.agentTimeoutSec,
@@ -845,6 +891,7 @@ function publicRepairJob(job) {
     strongProvider: job.strongProvider,
     strongBaseUrl: job.strongBaseUrl,
     strongModel: job.strongModel,
+    strongReasoningEffort: job.strongReasoningEffort,
     weakModel: job.weakModel,
     maxRollouts: job.maxRollouts,
     jobPaths: job.jobPaths,
@@ -875,9 +922,11 @@ function publicStageJob(job) {
     sourceSkillsDir: job.sourceSkillsDir || "",
     strongBaseUrl: job.strongBaseUrl || "",
     strongModel: job.strongModel || "",
+    strongReasoningEffort: job.strongReasoningEffort || "minimal",
     separateReviewLlm: Boolean(job.separateReviewLlm),
     reviewBaseUrl: job.reviewBaseUrl || "",
     reviewModel: job.reviewModel || "",
+    reviewReasoningEffort: job.reviewReasoningEffort || "minimal",
     stage7RepairMode: job.stage7RepairMode || "per_suggestion",
     stage7SkillPackageSize: job.stage7SkillPackageSize || 3,
     logLineCount: job.logs.length,
@@ -1811,12 +1860,18 @@ function loadRunSummary(run) {
   }
 }
 
-function defaultBaseUrlForAgent(agent) {
-  return "https://api.deepseek.com";
+function defaultBaseUrlForProvider(provider, agent) {
+  if (provider === "anthropic") return "https://api.anthropic.com";
+  if (provider === "openai") return "https://api.openai.com/v1";
+  if (provider === "custom") return "";
+  // Claude Code uses the Anthropic Messages surface. DeepSeek exposes that
+  // compatibility surface under /anthropic; OpenHands/OpenCode can normalize
+  // it back to the provider root below when required by their adapter.
+  return agent === "claude-agent-acp" ? "https://api.deepseek.com/anthropic" : "https://api.deepseek.com";
 }
 
-function normalizeBaseUrlForAgent(agent, baseUrl) {
-  const value = String(baseUrl || defaultBaseUrlForAgent(agent)).trim();
+function normalizeBaseUrlForAgent(agent, baseUrl, provider = "deepseek") {
+  const value = String(baseUrl || defaultBaseUrlForProvider(provider, agent)).trim();
   if (agent === "openhands") return value.replace(/\/anthropic\/?$/i, "");
   return value;
 }
@@ -1844,11 +1899,13 @@ function modelForBenchArg(group) {
 }
 
 function buildNonSecretAgentEnv(group) {
-  const baseUrl = normalizeBaseUrlForAgent(group.agent, group.baseUrl);
+  const baseUrl = normalizeBaseUrlForAgent(group.agent, group.baseUrl, group.provider);
   const model = modelForAgentEnv(group.agent, group.model);
   const env = {
     BENCHFLOW_PROVIDER_BASE_URL: baseUrl,
     BENCHFLOW_PROVIDER_MODEL: group.model,
+    BENCHFLOW_PROVIDER_TYPE: group.provider,
+    SKILLSBENCH_PROVIDER: group.provider,
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
   };
 
@@ -1972,8 +2029,8 @@ function checkDockerAvailable() {
 function buildRunEnv(group) {
   const env = { ...process.env };
   const apiKey = group.apiKey || process.env.DEEPSEEK_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY || "";
-  const baseUrl = normalizeBaseUrlForAgent(group.agent, group.baseUrl);
-  const deepSeekProvider = isDeepSeekProvider(group.model, baseUrl);
+  const baseUrl = normalizeBaseUrlForAgent(group.agent, group.baseUrl, group.provider);
+  const deepSeekProvider = group.provider === "deepseek" || isDeepSeekProvider(group.model, baseUrl);
   const uvCacheDir = path.join(ROOT, ".uv-cache");
   const dockerConfigDir = path.join(ROOT, ".docker-config");
   const buildxConfigDir = path.join(ROOT, ".docker-buildx");
@@ -1992,6 +2049,8 @@ function buildRunEnv(group) {
   env.OPENAI_BASE_URL = baseUrl;
   env.BENCHFLOW_PROVIDER_BASE_URL = baseUrl;
   env.BENCHFLOW_PROVIDER_MODEL = group.model;
+  env.BENCHFLOW_PROVIDER_TYPE = group.provider;
+  env.SKILLSBENCH_PROVIDER = group.provider;
   env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
   delete env.CLAUDE_CODE_EFFORT_LEVEL;
 
@@ -2032,7 +2091,7 @@ function buildBenchArgs(group, run) {
     "--jobs-dir",
     run.jobsDir,
     "--skill-mode",
-    group.skillMode,
+    group.effectiveSkillMode || (group.skillMode === "force-skill" ? "with-skill" : group.skillMode),
     "--concurrency",
     "1",
     "--agent-idle-timeout",
@@ -2043,8 +2102,14 @@ function buildBenchArgs(group, run) {
 
   // 推理强度属于 BenchFlow 的评测参数，必须通过命令行显式传递。
   // 仅设置 Claude Code 环境变量无法保证所有 ACP 适配器都采用相同强度。
-  if (group.reasoningEffort) {
-    args.push("--reasoning-effort", group.reasoningEffort);
+  const reasoningEffort = effectiveReasoningEffort(
+    group.provider,
+    group.model,
+    group.baseUrl,
+    group.reasoningEffort,
+  );
+  if (reasoningEffort) {
+    args.push("--reasoning-effort", reasoningEffort);
   }
 
   if (group.skillMode !== "no-skill" && group.skillsDir) {
@@ -2061,6 +2126,8 @@ function startRun(group, run) {
   run.status = "running";
   run.startedAt = nowIso();
   appendLog(run, `Starting ${run.taskName} run ${run.runNo}/${group.repeats}`);
+  appendLog(run, `Provider: ${group.provider} -> ${group.baseUrl}`);
+  appendLog(run, `Skill mode: ${group.skillMode} (BenchFlow: ${group.effectiveSkillMode})`);
   appendLog(run, `Prompt mode: ${group.promptMode || PROMPT_MODE_STANDARD}`);
   if (group.agentTimeoutSec) {
     appendLog(run, `Agent timeout override: ${group.agentTimeoutSec}s`);
@@ -2228,15 +2295,18 @@ function normalizeOptions(body) {
   const parallel = Math.min(Math.max(Number(body.parallel || 1), 1), 8);
   const model = String(body.model || "deepseek-v4-flash").trim();
   const agent = String(body.agent || "claude-agent-acp").trim();
-  const skillMode = String(body.skillMode || "with-skill").trim();
-  const promptMode = normalizePromptMode(body.promptMode);
-  const reasoningEffort = String(body.reasoningEffort || "").trim().toLowerCase();
-  if (reasoningEffort && !["minimal", "low", "medium", "high", "max", "xhigh"].includes(reasoningEffort)) {
-    throw new Error(`Unsupported reasoning effort: ${reasoningEffort}`);
-  }
+  const provider = normalizeProvider(body.provider);
+  const requestedSkillMode = normalizeSkillMode(body.skillMode);
+  const skillMode = requestedSkillMode;
+  const effectiveSkillMode = requestedSkillMode === "force-skill" ? "with-skill" : requestedSkillMode;
+  const promptMode = requestedSkillMode === "force-skill"
+    ? PROMPT_MODE_FORCE_ALL_SKILLS
+    : normalizePromptMode(body.promptMode);
+  const reasoningEffort = normalizeReasoningEffort(body.reasoningEffort);
   const agentTimeoutSec = normalizeOptionalTimeoutSec(body.agentTimeoutSec ?? body.taskTimeoutSec ?? body.timeoutSec);
   const agentIdleTimeout = String(body.agentIdleTimeout ?? "0").trim() || "0";
-  const baseUrl = normalizeBaseUrlForAgent(agent, body.baseUrl || defaultBaseUrlForAgent(agent));
+  const baseUrl = normalizeBaseUrlForAgent(agent, body.baseUrl, provider);
+  if (!baseUrl) throw new Error("Custom provider requires a Base URL");
   const apiKey = String(body.apiKey || "").trim();
   const jobsRoot = String(body.jobsRoot || `jobs/web-runner/${sanitizeSegment(task.name)}-${new Date().toISOString().replace(/[:.]/g, "-")}`).trim();
   const skillsLibrary = resolveLibraryForTask(task, String(body.skillsLibraryId || "").trim());
@@ -2258,7 +2328,9 @@ function normalizeOptions(body) {
     parallel,
     model,
     agent,
+    provider,
     skillMode,
+    effectiveSkillMode,
     promptMode,
     reasoningEffort,
     agentTimeoutSec,
@@ -2300,6 +2372,10 @@ function createGroup(options) {
       exitCode: null,
       error: null,
       logs: [],
+      provider: options.provider,
+      baseUrl: options.baseUrl,
+      skillMode: options.skillMode,
+      effectiveSkillMode: options.effectiveSkillMode,
       summary: null,
       artifactDir: null,
       promptMode: options.promptMode,
@@ -2350,6 +2426,7 @@ function normalizeRepairOptions(body) {
   const strongProvider = String(body.strongProvider || "anthropic").trim();
   const strongBaseUrl = String(body.strongBaseUrl || "https://api.camel-hub.com").trim();
   const strongModel = String(body.strongModel || "gpt-5.5").trim();
+  const strongReasoningEffort = normalizeReasoningEffort(body.strongReasoningEffort);
   const strongApiKey = String(body.strongApiKey || "").trim();
   const strongMaxTokens = Math.min(Math.max(Number(body.strongMaxTokens || 8000), 512), 32000);
   const strongTimeout = Math.min(Math.max(Number(body.strongTimeout || 240), 10), 900);
@@ -2369,6 +2446,7 @@ function normalizeRepairOptions(body) {
     strongProvider,
     strongBaseUrl,
     strongModel,
+    strongReasoningEffort,
     strongApiKey,
     strongMaxTokens,
     strongTimeout,
@@ -2398,6 +2476,8 @@ function buildRepairArgs(job) {
     job.strongBaseUrl,
     "--strong-model",
     job.strongModel,
+    "--strong-reasoning-effort",
+    job.strongReasoningEffort,
     "--strong-max-tokens",
     String(job.strongMaxTokens),
     "--strong-timeout",
@@ -2419,6 +2499,7 @@ function buildRepairEnv(job) {
   env.PYTHONUTF8 = "1";
   env.STRONG_LLM_BASE_URL = job.strongBaseUrl;
   env.STRONG_LLM_MODEL = job.strongModel;
+  env.STRONG_LLM_REASONING_EFFORT = job.strongReasoningEffort;
   env.WEAK_LLM_MODEL = job.weakModel;
   env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
   if (job.strongApiKey) {
@@ -2555,10 +2636,12 @@ function normalizeStageInitOptions(body) {
     stage7SkillPackageSize: Math.min(Math.max(Number(body.stage7SkillPackageSize || 3), 1), 100),
     strongBaseUrl: String(body.strongBaseUrl || "https://api.camel-hub.com").trim(),
     strongModel: String(body.strongModel || "gpt-5.5").trim(),
+    strongReasoningEffort: normalizeReasoningEffort(body.strongReasoningEffort || "minimal"),
     strongApiKey: String(body.strongApiKey || "").trim(),
     separateReviewLlm: Boolean(body.separateReviewLlm),
     reviewBaseUrl: String(body.reviewBaseUrl || "").trim(),
     reviewModel: String(body.reviewModel || "").trim(),
+    reviewReasoningEffort: normalizeReasoningEffort(body.reviewReasoningEffort || "minimal"),
     reviewApiKey: String(body.reviewApiKey || "").trim(),
     strongTimeout: Math.min(Math.max(Number(body.strongTimeout || 1800), 30), 3600),
     force: Boolean(body.force),
@@ -2597,10 +2680,12 @@ function normalizeStageRunOptions(command, body) {
     stage7SkillPackageSize: Math.min(Math.max(Number(body.stage7SkillPackageSize || manifest.stage7SkillPackageSize || 3), 1), 100),
     strongBaseUrl: String(body.strongBaseUrl || manifest.strongBaseUrl || "https://api.camel-hub.com").trim(),
     strongModel: String(body.strongModel || manifest.strongModel || "gpt-5.5").trim(),
+    strongReasoningEffort: normalizeReasoningEffort(body.strongReasoningEffort || manifest.strongReasoningEffort || "minimal"),
     strongApiKey: String(body.strongApiKey || "").trim(),
     separateReviewLlm: body.separateReviewLlm === undefined ? Boolean(manifest.separateReviewLlm) : Boolean(body.separateReviewLlm),
     reviewBaseUrl: String(body.reviewBaseUrl || manifest.reviewBaseUrl || "").trim(),
     reviewModel: String(body.reviewModel || manifest.reviewModel || "").trim(),
+    reviewReasoningEffort: normalizeReasoningEffort(body.reviewReasoningEffort || manifest.reviewReasoningEffort || "minimal"),
     reviewApiKey: String(body.reviewApiKey || "").trim(),
     strongTimeout: Math.min(Math.max(Number(body.strongTimeout || 1800), 30), 3600),
     noApply: Boolean(body.noApply),
@@ -2628,6 +2713,7 @@ function buildStageArgs(job) {
   if (job.outputSkillsDir) args.push("--output-skills-dir", job.outputSkillsDir);
   if (job.strongBaseUrl) args.push("--strong-base-url", job.strongBaseUrl);
   if (job.strongModel) args.push("--strong-model", job.strongModel);
+  if (job.strongReasoningEffort) args.push("--strong-reasoning-effort", job.strongReasoningEffort);
   if (job.strongApiKey) args.push("--strong-api-key", job.strongApiKey);
   if (job.maxPromptChars) args.push("--max-prompt-chars", String(job.maxPromptChars));
   if (job.traceAnalysisWorkers) args.push("--trace-analysis-workers", String(job.traceAnalysisWorkers));
@@ -2641,6 +2727,7 @@ function buildStageArgs(job) {
   args.push(job.separateReviewLlm ? "--use-separate-review-llm" : "--no-separate-review-llm");
   if (job.reviewBaseUrl) args.push("--review-base-url", job.reviewBaseUrl);
   if (job.reviewModel) args.push("--review-model", job.reviewModel);
+  if (job.reviewReasoningEffort) args.push("--review-reasoning-effort", job.reviewReasoningEffort);
   if (job.noApply) args.push("--no-apply");
   return args;
 }
@@ -2650,6 +2737,7 @@ function buildStageEnv(job) {
   env.PYTHONUTF8 = "1";
   env.OFFLINE_SKILL_RCA_BASE_URL = job.strongBaseUrl || env.OFFLINE_SKILL_RCA_BASE_URL || "";
   env.OFFLINE_SKILL_RCA_MODEL = job.strongModel || env.OFFLINE_SKILL_RCA_MODEL || "";
+  env.OFFLINE_SKILL_RCA_REASONING_EFFORT = job.strongReasoningEffort || "minimal";
   env.OFFLINE_SKILL_RCA_TIMEOUT_SEC = String(job.strongTimeout || 1800);
   if (job.strongApiKey) {
     env.OFFLINE_SKILL_RCA_API_KEY = job.strongApiKey;
@@ -2659,6 +2747,7 @@ function buildStageEnv(job) {
   if (job.reviewApiKey) env.OFFLINE_SKILL_RCA_REVIEW_API_KEY = job.reviewApiKey;
   if (job.reviewBaseUrl) env.OFFLINE_SKILL_RCA_REVIEW_BASE_URL = job.reviewBaseUrl;
   if (job.reviewModel) env.OFFLINE_SKILL_RCA_REVIEW_MODEL = job.reviewModel;
+  if (job.reviewReasoningEffort) env.OFFLINE_SKILL_RCA_REVIEW_REASONING_EFFORT = job.reviewReasoningEffort;
   if (job.separateReviewLlm) env.OFFLINE_SKILL_RCA_USE_SEPARATE_REVIEW_LLM = "1";
   return env;
 }

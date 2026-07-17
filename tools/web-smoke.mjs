@@ -19,6 +19,12 @@ async function getJson(url) {
   return response.json();
 }
 
+async function getText(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+  return response.text();
+}
+
 try {
   let health;
   for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -31,7 +37,27 @@ try {
   }
   if (!health) throw new Error(`web server did not become ready${stderr ? `: ${stderr}` : ""}`);
   const tasks = await getJson(`http://127.0.0.1:${port}/api/tasks`);
-  console.log(JSON.stringify({ health, taskCount: tasks.tasks?.length ?? 0, skillLibraryCount: tasks.skillLibraries?.length ?? 0 }, null, 2));
+  const [mainHtml, repairHtml, stageHtml] = await Promise.all([
+    getText(`http://127.0.0.1:${port}/`),
+    getText(`http://127.0.0.1:${port}/repair.html`),
+    getText(`http://127.0.0.1:${port}/repair-stage.html`),
+  ]);
+  const requiredMarkers = [
+    ["main.provider", mainHtml, 'id="provider"'],
+    ["main.skillMode", mainHtml, 'value="force-skill"'],
+    ["main.reasoningEffort", mainHtml, 'id="reasoningEffort"'],
+    ["repair.strongReasoningEffort", repairHtml, 'id="repairStrongReasoningEffort"'],
+    ["stage.strongReasoningEffort", stageHtml, 'id="stageStrongReasoningEffort"'],
+    ["stage.reviewReasoningEffort", stageHtml, 'id="stageReviewReasoningEffort"'],
+  ];
+  const missing = requiredMarkers.filter(([, html, marker]) => !html.includes(marker)).map(([name]) => name);
+  if (missing.length) throw new Error(`Missing UI markers: ${missing.join(", ")}`);
+  console.log(JSON.stringify({
+    health,
+    taskCount: tasks.tasks?.length ?? 0,
+    skillLibraryCount: tasks.skillLibraries?.length ?? 0,
+    featureMarkers: requiredMarkers.map(([name]) => name),
+  }, null, 2));
 } finally {
   child.kill();
 }

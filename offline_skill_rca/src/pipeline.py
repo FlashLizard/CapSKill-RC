@@ -603,6 +603,7 @@ def make_llm(config: OfflineSkillRCAConfig, transcript_name: str) -> LLMClient:
         max_retries_env_key="OFFLINE_SKILL_RCA_STAGE3_MAX_RETRIES" if is_stage3_trace else None,
         transcript_dir=config.output_dir / "llm_transcript",
         transcript_name=transcript_name,
+        reasoning_effort=getattr(config, "strong_reasoning_effort", ""),
     )
 
 
