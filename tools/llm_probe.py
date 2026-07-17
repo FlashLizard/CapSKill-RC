@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -57,22 +58,31 @@ def main() -> int:
     request = urllib.request.Request(
         endpoint(args.base_url),
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Authorization": f"Bearer {args.api_key}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {args.api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "OpenAI/1.0",
+            "Accept": "application/json",
+        },
         method="POST",
     )
     print(json.dumps({"provider": args.provider, "endpoint": endpoint(args.base_url), "model": args.model, "api_key_present": True}, indent=2))
+    started = time.perf_counter()
     try:
         with urllib.request.urlopen(request, timeout=args.timeout) as response:
             body = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")[:2000]
-        print(f"HTTP {error.code}: {detail}", file=sys.stderr)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        print(f"HTTP {error.code} after {elapsed_ms:.1f} ms: {detail}", file=sys.stderr)
         return 1
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
-        print(f"Request failed: {error}", file=sys.stderr)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        print(f"Request failed after {elapsed_ms:.1f} ms: {error}", file=sys.stderr)
         return 1
+    elapsed_ms = (time.perf_counter() - started) * 1000
     content = ((body.get("choices") or [{}])[0].get("message") or {}).get("content")
-    print(json.dumps({"ok": True, "content": content, "response_keys": sorted(body.keys())}, ensure_ascii=False, indent=2))
+    print(json.dumps({"ok": True, "latency_ms": round(elapsed_ms, 1), "content": content, "response_keys": sorted(body.keys())}, ensure_ascii=False, indent=2))
     return 0
 
 

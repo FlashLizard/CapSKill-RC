@@ -624,7 +624,12 @@ def call_llm_json(prompt: str, config: dict[str, Any], default_max_tokens: int, 
 
     if provider == "openai":
         url = normalize_base_url(base_url, "/chat/completions")
-        headers = {"content-type": "application/json", "authorization": f"Bearer {api_key}"}
+        headers = {
+            "content-type": "application/json",
+            "authorization": f"Bearer {api_key}",
+            "user-agent": "OpenAI/1.0",
+            "accept": "application/json",
+        }
         payload = {
             "model": model,
             "max_tokens": max_tokens,
@@ -648,6 +653,8 @@ def call_llm_json(prompt: str, config: dict[str, Any], default_max_tokens: int, 
             "content-type": "application/json",
             "x-api-key": api_key,
             "anthropic-version": config.get("anthropicVersion") or "2023-06-01",
+            "user-agent": "OpenAI/1.0",
+            "accept": "application/json",
         }
         payload = {
             "model": model,
@@ -870,7 +877,12 @@ def run_judge(analysis: dict[str, Any], judge: dict[str, Any]) -> dict[str, Any]
 
     if provider == "openai":
         url = normalize_base_url(base_url, "/chat/completions")
-        headers = {"content-type": "application/json", "authorization": f"Bearer {api_key}"}
+        headers = {
+            "content-type": "application/json",
+            "authorization": f"Bearer {api_key}",
+            "user-agent": "OpenAI/1.0",
+            "accept": "application/json",
+        }
         payload = {
             "model": model,
             "max_tokens": max_tokens,
@@ -893,6 +905,8 @@ def run_judge(analysis: dict[str, Any], judge: dict[str, Any]) -> dict[str, Any]
             "content-type": "application/json",
             "x-api-key": api_key,
             "anthropic-version": judge.get("anthropicVersion") or "2023-06-01",
+            "user-agent": "OpenAI/1.0",
+            "accept": "application/json",
         }
         payload = {
             "model": model,

@@ -101,4 +101,5 @@ python3 tools/bench.py run \
 2. Docker 在 Linux 下通常要求当前用户属于 `docker` 组；否则先用 `sudo docker` 验证权限，再调整 daemon 权限。
 3. Windows 的目录链接可能被策略阻止，数据安装脚本会提示改用 `--mode copy`。
 4. DeepSeek 对 `reasoning_effort` 的取值与部分网关不同；便携版默认使用 `low`，可通过 `OFFLINE_SKILL_RCA_REASONING_EFFORT=off` 关闭。
-5. `.data/`、`tasks/`、`jobs/`、`repair-runs/` 都是运行态数据，故意不进入新仓库。
+5. Repair 默认尊重 `HTTP_PROXY` / `HTTPS_PROXY`，并使用兼容网关常见的 `OpenAI/1.0` User-Agent；不需要代理时设置 `OFFLINE_SKILL_RCA_TRUST_ENV=0`。
+6. `.data/`、`tasks/`、`jobs/`、`repair-runs/` 都是运行态数据，故意不进入新仓库。

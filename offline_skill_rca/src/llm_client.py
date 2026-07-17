@@ -86,7 +86,14 @@ class LLMClient:
                 "messages": payload["messages"],
             },
         )
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            # 某些兼容网关会拦截 Python 默认 User-Agent；使用 OpenAI-compatible
+            # 客户端常见标识，同时允许高级用户通过环境变量覆盖。
+            "User-Agent": os.getenv("OFFLINE_SKILL_RCA_USER_AGENT", "OpenAI/1.0"),
+            "Accept": "application/json",
+        }
         # 长 repair prompt 可能导致模型响应很慢；默认 read timeout 给到 30 分钟，
         # 也允许用环境变量临时覆盖。
         timeout_sec = resolve_runtime_number(
@@ -109,7 +116,12 @@ class LLMClient:
                 f"timeout={timeout_sec:.0f}s prompt_chars={len(user)}"
             )
             try:
-                with httpx.Client(timeout=timeout, trust_env=False) as client:
+                # 默认尊重 HTTP_PROXY/HTTPS_PROXY。若当前网络不需要代理，可设置
+                # OFFLINE_SKILL_RCA_TRUST_ENV=0 关闭环境代理与证书配置读取。
+                trust_env = str(os.getenv("OFFLINE_SKILL_RCA_TRUST_ENV", "1")).strip().lower() not in {
+                    "0", "false", "no", "off"
+                }
+                with httpx.Client(timeout=timeout, trust_env=trust_env) as client:
                     response = client.post(endpoint, headers=headers, json=payload)
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 # 只对网络/超时类异常重试；HTTP 4xx/5xx 会在下面记录响应体后直接报错。
