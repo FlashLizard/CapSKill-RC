@@ -10,7 +10,9 @@ node_modules/
 .data/
 tasks/
 tasks-extra/
-skill-libraries/
+# Skill libraries are external/runtime inputs. Keep the repository's root
+# directory completely free of skill files, including every future variant.
+/skill-libraries/
 jobs/
 repair-runs/
 localimages/
