@@ -2,6 +2,7 @@ import http from "node:http";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
 import { spawn, execFile, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -37,8 +38,14 @@ const SKILL_MODES = new Set(["no-skill", "with-skill", "force-skill"]);
 const REASONING_EFFORTS = new Set(["off", "minimal", "low", "medium", "high", "max", "xhigh"]);
 const FORCE_ALL_SKILLS_PROMPT_PATH = path.join(APP_DIR, "prompts", "force-all-skills.md");
 const STOP_AUDIT_PATH = path.join(ROOT, "jobs", "web-runner", "runner-stop-audit.log");
-const REPAIR_STAGE_PRESET_PATH = path.join(ROOT, ".runner-config", "repair-stage-presets.json");
+const REPAIR_STAGE_PRESET_PATH = process.env.SKILLSBENCH_REPAIR_PRESET_PATH
+  ? path.resolve(ROOT, process.env.SKILLSBENCH_REPAIR_PRESET_PATH)
+  : path.join(ROOT, ".runner-config", "repair-stage-presets.json");
+const REPAIR_STAGE_PRESET_KEY_PATH = process.env.SKILLSBENCH_REPAIR_PRESET_KEY_PATH
+  ? path.resolve(ROOT, process.env.SKILLSBENCH_REPAIR_PRESET_KEY_PATH)
+  : path.join(path.dirname(REPAIR_STAGE_PRESET_PATH), "repair-stage-presets.key");
 const MAX_REPAIR_STAGE_PRESETS = 100;
+const PORTABLE_PRESET_PREFIX = "skillsbench-aes-256-gcm-v1";
 
 function nowIso() {
   return new Date().toISOString();
@@ -1411,7 +1418,83 @@ function runCurrentUserDpapi(script, inputBase64) {
   }
 }
 
+function presetEncryptionMode() {
+  const requested = String(process.env.SKILLSBENCH_PRESET_ENCRYPTION || "").trim().toLowerCase();
+  if (requested === "portable" || requested === "aes-gcm") return "portable";
+  if ((requested === "dpapi" || requested === "windows-dpapi") && process.platform === "win32") return "dpapi";
+  return process.platform === "win32" ? "dpapi" : "portable";
+}
+
+function base64UrlEncode(buffer) {
+  return Buffer.from(buffer).toString("base64url");
+}
+
+function base64UrlDecode(value) {
+  return Buffer.from(String(value || ""), "base64url");
+}
+
+function portablePresetSecret() {
+  const configured = String(process.env.SKILLSBENCH_PRESET_SECRET || "");
+  if (configured) return Buffer.from(configured, "utf8");
+
+  try {
+    const existing = fs.readFileSync(REPAIR_STAGE_PRESET_KEY_PATH);
+    if (existing.length > 0) return existing;
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+
+  const generated = randomBytes(32);
+  fs.mkdirSync(path.dirname(REPAIR_STAGE_PRESET_KEY_PATH), { recursive: true });
+  fs.writeFileSync(REPAIR_STAGE_PRESET_KEY_PATH, generated, { mode: 0o600 });
+  try {
+    fs.chmodSync(REPAIR_STAGE_PRESET_KEY_PATH, 0o600);
+  } catch {
+    // Windows does not expose POSIX file modes; the write still succeeds there.
+  }
+  return generated;
+}
+
+function protectPortablePresetSettings(settings) {
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = scryptSync(portablePresetSecret(), salt, 32);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(settings), "utf8"),
+    cipher.final(),
+  ]);
+  return [
+    PORTABLE_PRESET_PREFIX,
+    base64UrlEncode(salt),
+    base64UrlEncode(iv),
+    base64UrlEncode(cipher.getAuthTag()),
+    base64UrlEncode(ciphertext),
+  ].join(".");
+}
+
+function unprotectPortablePresetSettings(protectedSettings) {
+  const parts = String(protectedSettings || "").split(".");
+  if (parts.length !== 5 || parts[0] !== PORTABLE_PRESET_PREFIX) {
+    throw new Error("Invalid portable Repair preset format");
+  }
+  try {
+    const salt = base64UrlDecode(parts[1]);
+    const iv = base64UrlDecode(parts[2]);
+    const authTag = base64UrlDecode(parts[3]);
+    const ciphertext = base64UrlDecode(parts[4]);
+    const key = scryptSync(portablePresetSecret(), salt, 32);
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(authTag);
+    const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+    return JSON.parse(plaintext);
+  } catch (error) {
+    throw new Error(`Portable Repair preset decryption failed: ${error.message}`);
+  }
+}
+
 function protectPresetSettings(settings) {
+  if (presetEncryptionMode() === "portable") return protectPortablePresetSettings(settings);
   const script = [
     "Add-Type -AssemblyName System.Security",
     "$inputBase64=[Console]::In.ReadToEnd().Trim()",
@@ -1424,6 +1507,12 @@ function protectPresetSettings(settings) {
 }
 
 function unprotectPresetSettings(protectedSettings) {
+  if (String(protectedSettings || "").startsWith(`${PORTABLE_PRESET_PREFIX}.`)) {
+    return unprotectPortablePresetSettings(protectedSettings);
+  }
+  if (process.platform !== "win32" && presetEncryptionMode() !== "dpapi") {
+    throw new Error("该预设使用 Windows DPAPI 加密，请在原 Windows 用户环境中重新保存，或使用共享的便携预设密钥重新生成预设");
+  }
   const script = [
     "Add-Type -AssemblyName System.Security",
     "$inputBase64=[Console]::In.ReadToEnd().Trim()",

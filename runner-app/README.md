@@ -10,6 +10,10 @@ $env:DEEPSEEK_API_KEY = '<your-deepseek-api-key>'
 node runner-app/server.mjs
 ```
 
+Repair 页面保存的预设会加密保存 API Key。Windows 默认使用当前用户 DPAPI；Linux 和 macOS 默认使用 Node.js AES-256-GCM，不依赖 `powershell.exe`。
+
+便携预设加密会在 `.runner-config/repair-stage-presets.key` 自动生成本机密钥，该目录已被 `.gitignore` 排除。若需要在另一台机器迁移预设，请通过环境变量设置相同的 `SKILLSBENCH_PRESET_SECRET`，或者安全地迁移这个密钥文件；不要把密钥提交到 Git。也可以设置 `SKILLSBENCH_REPAIR_PRESET_PATH` 和 `SKILLSBENCH_REPAIR_PRESET_KEY_PATH` 指定预设及密钥文件位置。
+
 浏览器打开：
 
 ```text
